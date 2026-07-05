@@ -62,7 +62,6 @@ describe('Yinian MVP app', () => {
     render(<App />);
 
     await user.type(screen.getByLabelText('此刻你在想什么？'), '可以先做导出，降低本地存储风险。');
-    await user.type(screen.getByLabelText('粘贴链接'), 'https://example.com/export');
     await user.click(screen.getByRole('button', { name: '保存想法' }));
     await user.click(screen.getByRole('button', { name: '想法列表' }));
     await user.click(screen.getByRole('button', { name: '导出 JSON' }));
@@ -70,6 +69,34 @@ describe('Yinian MVP app', () => {
     expect(createObjectURL).toHaveBeenCalledWith(expect.any(Blob));
     expect(click).toHaveBeenCalledTimes(1);
     expect(revokeObjectURL).toHaveBeenCalledWith('blob:backup');
+  });
+
+  it('saves a plain idea without any source', async () => {
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await user.type(screen.getByLabelText('此刻你在想什么？'), '这只是一个突然冒出来的念头。');
+    await user.click(screen.getByRole('button', { name: '保存想法' }));
+    await user.click(screen.getByRole('button', { name: '想法列表' }));
+
+    expect(screen.getByText('这只是一个突然冒出来的念头。')).toBeInTheDocument();
+    expect(screen.queryByText('🔗')).not.toBeInTheDocument();
+    expect(screen.queryByText('📝')).not.toBeInTheDocument();
+  });
+
+  it('deletes an idea from the list', async () => {
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await user.type(screen.getByLabelText('此刻你在想什么？'), '这条想法之后要删掉。');
+    await user.click(screen.getByRole('button', { name: '保存想法' }));
+    await user.click(screen.getByRole('button', { name: '想法列表' }));
+    await user.click(screen.getByRole('button', { name: '删除想法：这条想法之后要删掉。' }));
+
+    expect(screen.queryByText('这条想法之后要删掉。')).not.toBeInTheDocument();
+    expect(screen.getByText('还没有想法。回到记录页，写一句话就开始。')).toBeInTheDocument();
   });
 
   it('keeps the saved list on a separate view with navigation back to capture', async () => {
@@ -81,7 +108,7 @@ describe('Yinian MVP app', () => {
     await user.click(screen.getByRole('button', { name: '想法列表' }));
     expect(screen.getByRole('button', { name: '想法列表' })).toHaveAttribute('aria-current', 'page');
     expect(screen.queryByLabelText('此刻你在想什么？')).not.toBeInTheDocument();
-    expect(screen.getByText('还没有想法。回到记录页，粘贴一个来源，写一句话就开始。')).toBeInTheDocument();
+    expect(screen.getByText('还没有想法。回到记录页，写一句话就开始。')).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: '记录想法' }));
     expect(screen.getByLabelText('此刻你在想什么？')).toBeInTheDocument();

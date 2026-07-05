@@ -8,7 +8,7 @@ export type IdeaSource =
 export interface Idea {
   id: string;
   content: string;
-  source: IdeaSource;
+  source: IdeaSource | null;
   createdAt: string;
   updatedAt: string;
 }

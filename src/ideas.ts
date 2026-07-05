@@ -13,11 +13,19 @@ export function createIdea(draft: IdeaDraft, now = new Date()): Idea {
   if (!draft.content.trim()) {
     throw new Error('idea content is required');
   }
-  if (!draft.source) {
-    throw new Error('idea source is required');
-  }
 
   const timestamp = now.toISOString();
+
+  if (!draft.source) {
+    return {
+      id: `idea_${now.getTime()}_${Math.random().toString(36).slice(2, 8)}`,
+      content: draft.content.trim(),
+      source: null,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
+  }
+
   return {
     id: `idea_${now.getTime()}_${Math.random().toString(36).slice(2, 8)}`,
     content: draft.content.trim(),

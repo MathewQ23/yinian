@@ -274,6 +274,27 @@ input:focus {
   padding: 22px;
 }
 
+.idea-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.delete-button {
+  border: 1px solid rgba(128, 69, 55, 0.16);
+  border-radius: 999px;
+  background: #fff2ee;
+  color: #9a4c39;
+  padding: 7px 12px;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.delete-button:hover {
+  background: #ffe4dc;
+}
+
 .idea-card + .idea-card {
   margin-top: 14px;
 }

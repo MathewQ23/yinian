@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import './App.css';
 import { createIdea, formatIdeaTime, groupIdeasByDay, urlHost } from './ideas';
 import { downloadIdeasExport } from './exportIdeas';
-import { addIdea, loadIdeas } from './ideaStorage';
+import { addIdea, deleteIdea, loadIdeas } from './ideaStorage';
 import { getImage, saveImage } from './imageStore';
 import type { Idea, IdeaSource, SourceType } from './types';
 
@@ -22,7 +22,7 @@ function App() {
   }, []);
 
   const groups = useMemo(() => groupIdeasByDay(ideas), [ideas]);
-  const canSave = content.trim().length > 0 && sourceContent.trim().length > 0 && !isSavingImage;
+  const canSave = content.trim().length > 0 && !isSavingImage;
 
   async function handleImageChange(file: File | undefined) {
     if (!file) return;
@@ -41,12 +41,13 @@ function App() {
   function handleSave() {
     if (!canSave) return;
 
-    const source: IdeaSource =
-      sourceType === 'url'
+    const source: IdeaSource | null = sourceContent.trim()
+      ? sourceType === 'url'
         ? { type: 'url', content: sourceContent }
         : sourceType === 'text'
           ? { type: 'text', content: sourceContent }
-          : { type: 'image', content: sourceContent, fileName: imageName || '截图' };
+          : { type: 'image', content: sourceContent, fileName: imageName || '截图' }
+      : null;
 
     const idea = createIdea({ content, source });
     setIdeas(addIdea(idea));
@@ -63,6 +64,10 @@ function App() {
       event.preventDefault();
       handleSave();
     }
+  }
+
+  function handleDeleteIdea(ideaId: string) {
+    setIdeas(deleteIdea(ideaId));
   }
 
   return (
@@ -98,7 +103,7 @@ function App() {
           onSave={handleSave}
         />
       ) : (
-        <TimelineView ideas={ideas} groups={groups} />
+        <TimelineView ideas={ideas} groups={groups} onDeleteIdea={handleDeleteIdea} />
       )}
     </main>
   );
@@ -186,7 +191,15 @@ function CaptureView({
   );
 }
 
-function TimelineView({ ideas, groups }: { ideas: Idea[]; groups: ReturnType<typeof groupIdeasByDay> }) {
+function TimelineView({
+  ideas,
+  groups,
+  onDeleteIdea,
+}: {
+  ideas: Idea[];
+  groups: ReturnType<typeof groupIdeasByDay>;
+  onDeleteIdea: (ideaId: string) => void;
+}) {
   return (
     <section className="timeline" aria-label="想法时间线">
       <div className="timeline-toolbar">
@@ -199,13 +212,13 @@ function TimelineView({ ideas, groups }: { ideas: Idea[]; groups: ReturnType<typ
         </button>
       </div>
       {groups.length === 0 ? (
-        <div className="empty-state">还没有想法。回到记录页，粘贴一个来源，写一句话就开始。</div>
+        <div className="empty-state">还没有想法。回到记录页，写一句话就开始。</div>
       ) : (
         groups.map((group) => (
           <div className="day-group" key={group.label}>
             <h2>{group.label}</h2>
             {group.ideas.map((idea) => (
-              <IdeaCard idea={idea} key={idea.id} />
+              <IdeaCard idea={idea} key={idea.id} onDelete={() => onDeleteIdea(idea.id)} />
             ))}
           </div>
         ))
@@ -249,12 +262,17 @@ function SourceInput({ sourceType, sourceContent, imageName, imagePreview, onCha
   );
 }
 
-function IdeaCard({ idea }: { idea: Idea }) {
+function IdeaCard({ idea, onDelete }: { idea: Idea; onDelete: () => void }) {
   return (
     <article className="idea-card">
-      <time>{formatIdeaTime(idea.createdAt)}</time>
+      <div className="idea-card-header">
+        <time>{formatIdeaTime(idea.createdAt)}</time>
+        <button className="delete-button" onClick={onDelete} type="button" aria-label={`删除想法：${idea.content}`}>
+          删除
+        </button>
+      </div>
       <p className="idea-content">{idea.content}</p>
-      <SourcePreview source={idea.source} />
+      {idea.source && <SourcePreview source={idea.source} />}
     </article>
   );
 }
