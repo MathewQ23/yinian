@@ -36,6 +36,28 @@
 - GitHub Pages 只托管静态页面，不会保存用户数据
 - 建议定期使用“导出 JSON”备份
 
+## 在线部署
+
+项目已经按 GitHub Pages project site 配置，生产构建路径为：
+
+```text
+/yinian/
+```
+
+推送到 `main` 后，GitHub Actions 会自动构建并部署到 GitHub Pages。
+
+预期访问地址：
+
+```text
+https://mathewq23.github.io/yinian/
+```
+
+如果第一次部署，需要在 GitHub 仓库页面开启 Pages：
+
+```text
+Settings → Pages → Build and deployment → Source → GitHub Actions
+```
+
 ## 本地开发
 
 ```bash
