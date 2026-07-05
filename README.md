@@ -1,32 +1,95 @@
-# React + TypeScript + Vite
+# 一念
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+记录想法，也记录它从哪里来。
 
-Currently, two official plugins are available:
+这是一个 local-first 的极简灵感记录 MVP。它不把自己做成复杂收藏夹，而是先验证一个最小闭环：
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+> 我看到一个东西 → 产生想法 → 立刻记下来 → 以后还能知道这个想法从哪里来的。
 
-## React Compiler
+## 当前功能
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+- 写想法：一个大输入框，快速记录此刻想到的内容
+- 添加来源：支持三种来源
+  - 链接
+  - 图片
+  - 文字
+- 自动记录时间：保存时自动写入创建/更新时间
+- 独立列表页：已记录内容不堆在首页，通过导航进入“想法列表”查看
+- 时间线展示：按今天、昨天、具体日期分组
+- 本地保存：不需要登录，不需要服务器
+- JSON 导出：可以把本地记录导出为备份文件
 
-## Expanding the Oxlint configuration
+## 数据保存在哪里
 
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
+当前版本是纯前端应用，所有数据都保存在浏览器本地：
 
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+- 想法文本、来源、时间戳：LocalStorage
+  - key: `yinian.ideas.v1`
+- 上传图片：IndexedDB
+  - database: `yinian-images`
+  - store: `images`
+
+注意：
+
+- 换浏览器、换设备后看不到原来的记录
+- 清理浏览器站点数据会删除记录
+- GitHub Pages 只托管静态页面，不会保存用户数据
+- 建议定期使用“导出 JSON”备份
+
+## 本地开发
+
+```bash
+npm install
+npm run dev
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+然后打开 Vite 输出的本地地址。
+
+## 测试与构建
+
+```bash
+npm run test
+npm run build
+npm run lint
+```
+
+当前验证结果：
+
+- 测试：5 个测试文件，12 个测试通过
+- 构建：通过
+- Lint：0 warnings / 0 errors
+
+## 技术栈
+
+- React
+- TypeScript
+- Vite
+- Vitest
+- Testing Library
+- LocalStorage
+- IndexedDB
+
+## 暂时不做什么
+
+为了保持 MVP 聚焦，当前版本刻意不做：
+
+- AI 自动总结
+- AI 标签
+- 自动分类
+- 知识图谱
+- 向量搜索
+- 浏览器插件
+- 视频时间戳解析
+- 网页全文保存
+- 自动截图网页
+- 用户系统
+- 社交功能
+- Markdown 编辑器
+
+## 产品原则
+
+记录一个灵感不能比发一条微信消息更麻烦。
+
+第一版只关注：
+
+> 用户是否愿意在产生想法之后，同时记录自己的想法和来源？
