@@ -44,7 +44,7 @@
 /yinian/
 ```
 
-推送到 `main` 后，GitHub Actions 会自动构建并部署到 GitHub Pages。
+当前采用 `gh-pages` 分支部署，避免依赖 GitHub Actions 的 Pages 部署权限。
 
 预期访问地址：
 
@@ -52,10 +52,18 @@
 https://mathewq23.github.io/yinian/
 ```
 
-如果第一次部署，需要在 GitHub 仓库页面开启 Pages：
+第一次部署后，需要在 GitHub 仓库页面设置 Pages 来源：
 
 ```text
-Settings → Pages → Build and deployment → Source → GitHub Actions
+Settings → Pages → Build and deployment → Source → Deploy from a branch
+Branch: gh-pages
+Folder: / (root)
+```
+
+本地重新部署：
+
+```bash
+npm run deploy:pages
 ```
 
 ## 本地开发

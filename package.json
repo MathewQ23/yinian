@@ -8,7 +8,8 @@
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview",
-    "test": "vitest run"
+    "test": "vitest run",
+    "deploy:pages": "npm run build && touch dist/.nojekyll && git subtree push --prefix dist origin gh-pages"
   },
   "dependencies": {
     "react": "^19.2.7",
