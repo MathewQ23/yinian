@@ -1,9 +1,12 @@
 import type { Idea, IdeaDayGroup, IdeaDraft } from './types';
 
+const APP_TIME_ZONE = 'Asia/Shanghai';
+
 const TIME_FORMATTER = new Intl.DateTimeFormat('zh-CN', {
   hour: '2-digit',
   minute: '2-digit',
   hour12: false,
+  timeZone: APP_TIME_ZONE,
 });
 
 export function createIdea(draft: IdeaDraft, now = new Date()): Idea {
@@ -59,9 +62,16 @@ export function urlHost(url: string): string {
 }
 
 function localDateKey(date: Date): string {
-  const year = date.getFullYear();
-  const month = `${date.getMonth() + 1}`.padStart(2, '0');
-  const day = `${date.getDate()}`.padStart(2, '0');
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    timeZone: APP_TIME_ZONE,
+  }).formatToParts(date);
+
+  const year = parts.find((part) => part.type === 'year')?.value;
+  const month = parts.find((part) => part.type === 'month')?.value;
+  const day = parts.find((part) => part.type === 'day')?.value;
   return `${year}-${month}-${day}`;
 }
 
