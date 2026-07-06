@@ -6,8 +6,10 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "build:server": "tsc -b && vite build --mode server",
     "lint": "oxlint",
     "preview": "vite preview",
+    "start": "node server/server.mjs",
     "test": "vitest run",
     "deploy:pages": "bash scripts/deploy-pages.sh"
   },

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import './App.css';
 import { createIdea, formatIdeaTime, groupIdeasByDay, urlHost } from './ideas';
 import { downloadIdeasExport } from './exportIdeas';
+import { createServerIdea, deleteServerIdea, fetchServerIdeas, uploadImageToServer } from './api';
 import { addIdea, deleteIdea, loadIdeas } from './ideaStorage';
 import { getImage, saveImage } from './imageStore';
 import type { Idea, IdeaSource, SourceType } from './types';
@@ -19,6 +20,13 @@ function App() {
 
   useEffect(() => {
     setIdeas(loadIdeas());
+    fetchServerIdeas()
+      .then((serverIdeas) => {
+        setIdeas(serverIdeas);
+      })
+      .catch(() => {
+        // Local fallback keeps the app usable during local static preview or network outages.
+      });
   }, []);
 
   const groups = useMemo(() => groupIdeasByDay(ideas), [ideas]);
@@ -28,17 +36,24 @@ function App() {
     if (!file) return;
     setIsSavingImage(true);
     try {
-      const imageId = await saveImage(file);
-      setSourceContent(imageId);
-      setImageName(file.name);
-      setImagePreview(URL.createObjectURL(file));
+      try {
+        const uploaded = await uploadImageToServer(file);
+        setSourceContent(uploaded.url);
+        setImageName(uploaded.fileName);
+        setImagePreview(uploaded.url);
+      } catch {
+        const imageId = await saveImage(file);
+        setSourceContent(imageId);
+        setImageName(file.name);
+        setImagePreview(URL.createObjectURL(file));
+      }
       setSourceType('image');
     } finally {
       setIsSavingImage(false);
     }
   }
 
-  function handleSave() {
+  async function handleSave() {
     if (!canSave) return;
 
     const source: IdeaSource | null = sourceContent.trim()
@@ -49,8 +64,15 @@ function App() {
           : { type: 'image', content: sourceContent, fileName: imageName || '截图' }
       : null;
 
-    const idea = createIdea({ content, source });
-    setIdeas(addIdea(idea));
+    const localIdea = createIdea({ content, source });
+    let savedIdeas: Idea[];
+    try {
+      const serverIdea = await createServerIdea({ content, source });
+      savedIdeas = [serverIdea, ...ideas.filter((idea) => idea.id !== serverIdea.id)];
+    } catch {
+      savedIdeas = addIdea(localIdea);
+    }
+    setIdeas(savedIdeas);
     setContent('');
     setSourceContent('');
     setImagePreview('');
@@ -62,12 +84,17 @@ function App() {
   function handleKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
     if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
       event.preventDefault();
-      handleSave();
+      void handleSave();
     }
   }
 
-  function handleDeleteIdea(ideaId: string) {
-    setIdeas(deleteIdea(ideaId));
+  async function handleDeleteIdea(ideaId: string) {
+    try {
+      await deleteServerIdea(ideaId);
+      setIdeas((currentIdeas) => currentIdeas.filter((idea) => idea.id !== ideaId));
+    } catch {
+      setIdeas(deleteIdea(ideaId));
+    }
   }
 
   return (
@@ -103,7 +130,7 @@ function App() {
           onSave={handleSave}
         />
       ) : (
-        <TimelineView ideas={ideas} groups={groups} onDeleteIdea={handleDeleteIdea} />
+        <TimelineView ideas={ideas} groups={groups} onDeleteIdea={(ideaId) => void handleDeleteIdea(ideaId)} />
       )}
     </main>
   );
@@ -122,7 +149,7 @@ interface CaptureViewProps {
   onSourceContentChange: (value: string) => void;
   onImageChange: (file: File | undefined) => void;
   onKeyDown: (event: React.KeyboardEvent<HTMLTextAreaElement>) => void;
-  onSave: () => void;
+  onSave: () => void | Promise<void>;
 }
 
 function CaptureView({
@@ -182,7 +209,7 @@ function CaptureView({
 
       <div className="composer-footer">
         <span>Ctrl + Enter 保存</span>
-        <button className="save-button" disabled={!canSave} onClick={onSave} type="button">
+        <button className="save-button" disabled={!canSave} onClick={() => void onSave()} type="button">
           保存想法
         </button>
       </div>
@@ -300,9 +327,14 @@ function SourcePreview({ source }: { source: IdeaSource }) {
 }
 
 function ImageSourcePreview({ source }: { source: Extract<IdeaSource, { type: 'image' }> }) {
-  const [previewUrl, setPreviewUrl] = useState<string>('');
+  const [previewUrl, setPreviewUrl] = useState<string>(source.content.startsWith('/uploads/') ? source.content : '');
 
   useEffect(() => {
+    if (source.content.startsWith('/uploads/')) {
+      setPreviewUrl(source.content);
+      return undefined;
+    }
+
     let objectUrl = '';
     getImage(source.content).then((file) => {
       if (!file) return;
