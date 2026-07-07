@@ -15,12 +15,14 @@ export function createIdea(draft: IdeaDraft, now = new Date()): Idea {
   }
 
   const timestamp = now.toISOString();
+  const linkedIdeaIds = normalizeLinkedIdeaIds(draft.linkedIdeaIds);
 
   if (!draft.source) {
     return {
       id: `idea_${now.getTime()}_${Math.random().toString(36).slice(2, 8)}`,
       content: draft.content.trim(),
       source: null,
+      ...(linkedIdeaIds.length ? { linkedIdeaIds } : {}),
       createdAt: timestamp,
       updatedAt: timestamp,
     };
@@ -30,6 +32,7 @@ export function createIdea(draft: IdeaDraft, now = new Date()): Idea {
     id: `idea_${now.getTime()}_${Math.random().toString(36).slice(2, 8)}`,
     content: draft.content.trim(),
     source: normalizeSource(draft.source),
+    ...(linkedIdeaIds.length ? { linkedIdeaIds } : {}),
     createdAt: timestamp,
     updatedAt: timestamp,
   };
@@ -93,4 +96,9 @@ function normalizeSource(source: NonNullable<IdeaDraft['source']>) {
     ...source,
     content: source.content.trim(),
   };
+}
+
+function normalizeLinkedIdeaIds(linkedIdeaIds: IdeaDraft['linkedIdeaIds']): string[] {
+  if (!Array.isArray(linkedIdeaIds)) return [];
+  return [...new Set(linkedIdeaIds.map((id) => id.trim()).filter(Boolean))];
 }

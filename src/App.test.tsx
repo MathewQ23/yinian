@@ -44,6 +44,28 @@ describe('Yinian MVP app', () => {
     expect(screen.queryByText('文件夹')).not.toBeInTheDocument();
   });
 
+  it('can link a new idea to an existing idea and shows the reference chain', async () => {
+    const user = userEvent.setup();
+
+    render(<App />);
+
+    await user.type(screen.getByLabelText('此刻你在想什么？'), '第一个想法：先记录问题。');
+    await user.click(screen.getByRole('button', { name: '保存想法' }));
+
+    await user.clear(screen.getByLabelText('此刻你在想什么？'));
+    await user.type(screen.getByLabelText('此刻你在想什么？'), '第二个想法：补充解决路径。');
+    await user.click(screen.getByRole('button', { name: '+ 引用' }));
+    expect(screen.getByRole('dialog', { name: '选择引用想法' })).toBeInTheDocument();
+    await user.click(screen.getByRole('checkbox', { name: '引用想法：第一个想法：先记录问题。' }));
+    await user.click(screen.getByRole('button', { name: '确定引用' }));
+    await user.click(screen.getByRole('button', { name: '保存想法' }));
+    await user.click(screen.getByRole('button', { name: '想法列表' }));
+
+    expect(screen.getByText('第二个想法：补充解决路径。')).toBeInTheDocument();
+    expect(screen.getByText('引用')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: '第一个想法：先记录问题。' })).toBeInTheDocument();
+  });
+
   it('exports current ideas as a JSON backup download', async () => {
     vi.setSystemTime(new Date('2026-07-05T23:20:00+08:00'));
     const user = userEvent.setup();
@@ -85,7 +107,26 @@ describe('Yinian MVP app', () => {
     expect(screen.queryByText('📝')).not.toBeInTheDocument();
   });
 
-  it('deletes an idea from the list', async () => {
+  it('collapses long ideas in the list and can expand them', async () => {
+    const user = userEvent.setup();
+    const longIdea = '这是一个很长的想法，默认不应该把整条内容全部撑开。'.repeat(8);
+
+    render(<App />);
+
+    await user.type(screen.getByLabelText('此刻你在想什么？'), longIdea);
+    await user.click(screen.getByRole('button', { name: '保存想法' }));
+    await user.click(screen.getByRole('button', { name: '想法列表' }));
+
+    const content = screen.getByText(longIdea);
+    expect(content).toHaveClass('idea-content-collapsed');
+    expect(screen.getByRole('button', { name: '展开全文' })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: '展开全文' }));
+    expect(content).not.toHaveClass('idea-content-collapsed');
+    expect(screen.getByRole('button', { name: '收起' })).toBeInTheDocument();
+  });
+
+  it('asks for confirmation before deleting an idea from the list', async () => {
     const user = userEvent.setup();
 
     render(<App />);
@@ -94,6 +135,16 @@ describe('Yinian MVP app', () => {
     await user.click(screen.getByRole('button', { name: '保存想法' }));
     await user.click(screen.getByRole('button', { name: '想法列表' }));
     await user.click(screen.getByRole('button', { name: '删除想法：这条想法之后要删掉。' }));
+
+    expect(screen.getByText('这条想法之后要删掉。')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '确认删除想法：这条想法之后要删掉。' })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: '取消' }));
+    expect(screen.queryByRole('button', { name: '确认删除想法：这条想法之后要删掉。' })).not.toBeInTheDocument();
+    expect(screen.getByText('这条想法之后要删掉。')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: '删除想法：这条想法之后要删掉。' }));
+    await user.click(screen.getByRole('button', { name: '确认删除想法：这条想法之后要删掉。' }));
 
     expect(screen.queryByText('这条想法之后要删掉。')).not.toBeInTheDocument();
     expect(screen.getByText('还没有想法。回到记录页，写一句话就开始。')).toBeInTheDocument();

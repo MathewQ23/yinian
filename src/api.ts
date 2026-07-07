@@ -13,15 +13,23 @@ interface UploadResponse {
   fileName: string;
 }
 
+const baseUrl = import.meta.env.BASE_URL.replace(/\/$/, '');
+const apiBase = `${baseUrl}/api`;
+
+function assetUrl(path: string): string {
+  if (!path.startsWith('/')) return path;
+  return `${baseUrl}${path}`;
+}
+
 export async function fetchServerIdeas(): Promise<Idea[]> {
-  const response = await fetch('/api/ideas');
+  const response = await fetch(`${apiBase}/ideas`);
   if (!response.ok) throw new Error(`Failed to fetch ideas: ${response.status}`);
   const body = (await response.json()) as IdeasResponse;
   return body.ideas;
 }
 
-export async function createServerIdea(input: { content: string; source: IdeaSource | null }): Promise<Idea> {
-  const response = await fetch('/api/ideas', {
+export async function createServerIdea(input: { content: string; source: IdeaSource | null; linkedIdeaIds?: string[] }): Promise<Idea> {
+  const response = await fetch(`${apiBase}/ideas`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(input),
@@ -32,12 +40,12 @@ export async function createServerIdea(input: { content: string; source: IdeaSou
 }
 
 export async function deleteServerIdea(ideaId: string): Promise<void> {
-  const response = await fetch(`/api/ideas/${encodeURIComponent(ideaId)}`, { method: 'DELETE' });
+  const response = await fetch(`${apiBase}/ideas/${encodeURIComponent(ideaId)}`, { method: 'DELETE' });
   if (!response.ok) throw new Error(`Failed to delete idea: ${response.status}`);
 }
 
 export async function uploadImageToServer(file: File): Promise<UploadResponse> {
-  const response = await fetch('/api/uploads', {
+  const response = await fetch(`${apiBase}/uploads`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -47,7 +55,8 @@ export async function uploadImageToServer(file: File): Promise<UploadResponse> {
     }),
   });
   if (!response.ok) throw new Error(`Failed to upload image: ${response.status}`);
-  return (await response.json()) as UploadResponse;
+  const body = (await response.json()) as UploadResponse;
+  return { ...body, url: assetUrl(body.url) };
 }
 
 async function fileToBase64(file: File): Promise<string> {

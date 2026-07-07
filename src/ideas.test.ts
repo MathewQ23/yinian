@@ -19,6 +19,17 @@ describe('idea domain', () => {
     expect(idea.updatedAt).toBe('2026-07-05T14:36:00.000Z');
   });
 
+  it('keeps linked idea ids when creating a new idea', () => {
+    const now = new Date('2026-07-05T22:40:00+08:00');
+    const idea = createIdea({
+      content: '新想法可以接到旧想法后面。',
+      source: null,
+      linkedIdeaIds: ['idea_old_1', 'idea_old_2'],
+    }, now);
+
+    expect(idea.linkedIdeaIds).toEqual(['idea_old_1', 'idea_old_2']);
+  });
+
   it('groups ideas into 今天、昨天 and calendar dates using local day boundaries', () => {
     const now = new Date('2026-07-05T10:00:00+08:00');
     const ideas: Idea[] = [

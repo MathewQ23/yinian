@@ -3,7 +3,7 @@ set -euo pipefail
 
 APP_DIR="${APP_DIR:-/home/agentuser/workspace/yinian}"
 SERVICE_NAME="${SERVICE_NAME:-yinian}"
-PORT="${PORT:-3010}"
+PORT="${PORT:-3011}"
 DOMAIN="${DOMAIN:-www.pdfyiwen.cloud}"
 
 cd "$APP_DIR"
@@ -28,6 +28,7 @@ Environment=PORT=${PORT}
 Environment=YINIAN_DATA_DIR=${APP_DIR}/server-data
 Environment=YINIAN_UPLOAD_DIR=${APP_DIR}/server-data/uploads
 Environment=YINIAN_PUBLIC_DIR=${APP_DIR}/dist
+Environment=YINIAN_BASE_PATH=/yinian
 ExecStart=$(command -v node) ${APP_DIR}/server/server.mjs
 Restart=always
 RestartSec=3
@@ -63,6 +64,17 @@ NGINX
   sudo systemctl reload nginx
 fi
 
-curl -fsS "http://127.0.0.1:${PORT}/api/health"
-echo
-echo "Yinian deployed. Open: http://${DOMAIN}/"
+HEALTH_URL="http://127.0.0.1:${PORT}/api/health"
+for attempt in $(seq 1 20); do
+  if curl -fsS "$HEALTH_URL" >/tmp/yinian-health-check.out 2>/dev/null; then
+    cat /tmp/yinian-health-check.out
+    echo
+    echo "Yinian deployed. Open: https://${DOMAIN}/yinian/"
+    exit 0
+  fi
+  sleep 0.5
+done
+
+echo "Yinian health check failed after waiting: ${HEALTH_URL}" >&2
+sudo systemctl status "${SERVICE_NAME}" --no-pager -l >&2 || true
+exit 1

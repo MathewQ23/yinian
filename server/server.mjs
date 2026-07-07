@@ -1,9 +1,10 @@
 import { createServer as createHttpServer } from 'node:http';
-import { mkdir, readFile, writeFile, stat } from 'node:fs/promises';
-import { createReadStream } from 'node:fs';
+import { mkdir, writeFile, stat } from 'node:fs/promises';
+import { createReadStream, readFileSync } from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import Database from 'better-sqlite3';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
@@ -22,31 +23,41 @@ const MIME_TYPES = {
 
 export function createYinianServer(options = {}) {
   const port = Number(options.port ?? process.env.PORT ?? 3010);
+  const basePath = normalizeBasePath(options.basePath ?? process.env.YINIAN_BASE_PATH ?? '');
   const dataDir = path.resolve(options.dataDir ?? process.env.YINIAN_DATA_DIR ?? path.join(rootDir, 'server-data'));
   const uploadDir = path.resolve(options.uploadDir ?? process.env.YINIAN_UPLOAD_DIR ?? path.join(dataDir, 'uploads'));
   const publicDir = path.resolve(options.publicDir ?? process.env.YINIAN_PUBLIC_DIR ?? path.join(rootDir, 'dist'));
-  const dbFile = path.join(dataDir, 'ideas.json');
+  const legacyJsonFile = path.join(dataDir, 'ideas.json');
+  const sqliteFile = path.join(dataDir, 'yinian.sqlite');
+  let db;
 
   async function ensureStorage() {
     await mkdir(dataDir, { recursive: true });
     await mkdir(uploadDir, { recursive: true });
-    try {
-      await stat(dbFile);
-    } catch {
-      await writeFile(dbFile, '[]\n', 'utf8');
-    }
+    ensureDatabase();
   }
 
   async function readIdeas() {
     await ensureStorage();
-    const raw = await readFile(dbFile, 'utf8');
-    const parsed = JSON.parse(raw || '[]');
-    return Array.isArray(parsed) ? parsed.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt))) : [];
+    return db.prepare('SELECT id, content, source_json, created_at, updated_at FROM ideas ORDER BY created_at DESC').all().map(rowToIdea);
   }
 
-  async function writeIdeas(ideas) {
+  async function saveIdea(idea) {
     await ensureStorage();
-    await writeFile(dbFile, `${JSON.stringify(ideas, null, 2)}\n`, 'utf8');
+    db.prepare(`
+      INSERT INTO ideas (id, content, source_json, created_at, updated_at)
+      VALUES (@id, @content, @sourceJson, @createdAt, @updatedAt)
+      ON CONFLICT(id) DO UPDATE SET
+        content = excluded.content,
+        source_json = excluded.source_json,
+        created_at = excluded.created_at,
+        updated_at = excluded.updated_at
+    `).run(ideaToRow(idea));
+  }
+
+  async function deleteIdea(id) {
+    await ensureStorage();
+    db.prepare('DELETE FROM ideas WHERE id = ?').run(id);
   }
 
   async function readJsonBody(req) {
@@ -80,20 +91,18 @@ export function createYinianServer(options = {}) {
         id: body.id || `idea_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`,
         content: String(body.content).trim(),
         source: body.source ?? null,
+        linkedIdeaIds: normalizeLinkedIdeaIds(body.linkedIdeaIds),
         createdAt: body.createdAt || now,
         updatedAt: body.updatedAt || now,
       };
-      const ideas = await readIdeas();
-      await writeIdeas([idea, ...ideas.filter((item) => item.id !== idea.id)]);
+      await saveIdea(idea);
       return sendJson(res, 201, { idea });
     }
 
     const deleteMatch = url.pathname.match(/^\/api\/ideas\/([^/]+)$/);
     if (req.method === 'DELETE' && deleteMatch) {
       const id = decodeURIComponent(deleteMatch[1]);
-      const ideas = await readIdeas();
-      const nextIdeas = ideas.filter((idea) => idea.id !== id);
-      await writeIdeas(nextIdeas);
+      await deleteIdea(id);
       return sendJson(res, 200, { ok: true });
     }
 
@@ -135,6 +144,9 @@ export function createYinianServer(options = {}) {
   const server = createHttpServer(async (req, res) => {
     try {
       const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
+      if (basePath && (url.pathname === basePath || url.pathname.startsWith(`${basePath}/`))) {
+        url.pathname = url.pathname.slice(basePath.length) || '/';
+      }
       if (url.pathname.startsWith('/api/')) return await handleApi(req, res, url);
       if (url.pathname.startsWith('/uploads/')) {
         const requested = path.resolve(uploadDir, decodeURIComponent(url.pathname.replace('/uploads/', '')));
@@ -150,6 +162,100 @@ export function createYinianServer(options = {}) {
   });
 
   return { server, port, ensureStorage, readIdeas };
+
+  function ensureDatabase() {
+    if (db) return;
+    db = new Database(sqliteFile);
+    db.pragma('journal_mode = WAL');
+    db.pragma('foreign_keys = ON');
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS ideas (
+        id TEXT PRIMARY KEY,
+        content TEXT NOT NULL,
+        source_json TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_ideas_created_at ON ideas(created_at DESC);
+    `);
+    migrateLegacyJsonIfNeeded();
+  }
+
+  function migrateLegacyJsonIfNeeded() {
+    const count = db.prepare('SELECT COUNT(*) AS count FROM ideas').get().count;
+    if (count > 0) return;
+    let raw;
+    try {
+      raw = readFileSyncUtf8(legacyJsonFile);
+    } catch {
+      return;
+    }
+    const parsed = JSON.parse(raw || '[]');
+    if (!Array.isArray(parsed) || parsed.length === 0) return;
+    const insert = db.prepare(`
+      INSERT OR IGNORE INTO ideas (id, content, source_json, created_at, updated_at)
+      VALUES (@id, @content, @sourceJson, @createdAt, @updatedAt)
+    `);
+    const migrate = db.transaction((ideas) => {
+      for (const idea of ideas) {
+        if (!idea?.id || !idea?.content) continue;
+        insert.run(ideaToRow({
+          id: String(idea.id),
+          content: String(idea.content),
+          source: idea.source ?? null,
+          linkedIdeaIds: normalizeLinkedIdeaIds(idea.linkedIdeaIds),
+          createdAt: idea.createdAt || new Date().toISOString(),
+          updatedAt: idea.updatedAt || idea.createdAt || new Date().toISOString(),
+        }));
+      }
+    });
+    migrate(parsed);
+  }
+}
+
+function readFileSyncUtf8(filePath) {
+  return readFileSync(filePath, 'utf8');
+}
+
+function ideaToRow(idea) {
+  const linkedIdeaIds = normalizeLinkedIdeaIds(idea.linkedIdeaIds);
+  const sourceJson = linkedIdeaIds.length
+    ? JSON.stringify({ source: idea.source ?? null, linkedIdeaIds })
+    : idea.source == null ? null : JSON.stringify(idea.source);
+
+  return {
+    id: idea.id,
+    content: idea.content,
+    sourceJson,
+    createdAt: idea.createdAt,
+    updatedAt: idea.updatedAt,
+  };
+}
+
+function rowToIdea(row) {
+  const parsed = row.source_json ? JSON.parse(row.source_json) : null;
+  const isEnvelope = parsed && typeof parsed === 'object' && ('source' in parsed || 'linkedIdeaIds' in parsed);
+  const linkedIdeaIds = normalizeLinkedIdeaIds(isEnvelope ? parsed.linkedIdeaIds : undefined);
+
+  return {
+    id: row.id,
+    content: row.content,
+    source: isEnvelope ? parsed.source : parsed,
+    ...(linkedIdeaIds.length ? { linkedIdeaIds } : {}),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function normalizeLinkedIdeaIds(value) {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.map((id) => String(id).trim()).filter(Boolean))];
+}
+
+function normalizeBasePath(value) {
+  const raw = String(value || '').trim();
+  if (!raw || raw === '/') return '';
+  return `/${raw.replace(/^\/+|\/+$/g, '')}`;
 }
 
 function extensionForMime(mimeType, originalName) {

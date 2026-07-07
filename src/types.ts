@@ -9,6 +9,7 @@ export interface Idea {
   id: string;
   content: string;
   source: IdeaSource | null;
+  linkedIdeaIds?: string[];
   createdAt: string;
   updatedAt: string;
 }
@@ -16,6 +17,7 @@ export interface Idea {
 export interface IdeaDraft {
   content: string;
   source: IdeaSource | null;
+  linkedIdeaIds?: string[];
 }
 
 export interface IdeaDayGroup {

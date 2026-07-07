@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import './App.css';
 import { createIdea, formatIdeaTime, groupIdeasByDay, urlHost } from './ideas';
 import { downloadIdeasExport } from './exportIdeas';
@@ -15,6 +15,8 @@ function App() {
   const [imagePreview, setImagePreview] = useState('');
   const [imageName, setImageName] = useState('');
   const [isSavingImage, setIsSavingImage] = useState(false);
+  const [isLinkingIdeas, setIsLinkingIdeas] = useState(false);
+  const [linkedIdeaIds, setLinkedIdeaIds] = useState<string[]>([]);
   const [activeView, setActiveView] = useState<'capture' | 'list'>('capture');
   const [statusMessage, setStatusMessage] = useState('');
 
@@ -64,10 +66,10 @@ function App() {
           : { type: 'image', content: sourceContent, fileName: imageName || '截图' }
       : null;
 
-    const localIdea = createIdea({ content, source });
+    const localIdea = createIdea({ content, source, linkedIdeaIds });
     let savedIdeas: Idea[];
     try {
-      const serverIdea = await createServerIdea({ content, source });
+      const serverIdea = await createServerIdea({ content, source, linkedIdeaIds });
       savedIdeas = [serverIdea, ...ideas.filter((idea) => idea.id !== serverIdea.id)];
     } catch {
       savedIdeas = addIdea(localIdea);
@@ -77,6 +79,8 @@ function App() {
     setSourceContent('');
     setImagePreview('');
     setImageName('');
+    setLinkedIdeaIds([]);
+    setIsLinkingIdeas(false);
     setSourceType('url');
     setStatusMessage('保存成功，已放到想法列表。');
   }
@@ -87,6 +91,10 @@ function App() {
       void handleSave();
     }
   }
+
+  const handleToggleLinkingIdeas = useCallback(() => {
+    setIsLinkingIdeas((isOpen) => !isOpen);
+  }, []);
 
   async function handleDeleteIdea(ideaId: string) {
     try {
@@ -120,11 +128,16 @@ function App() {
           sourceContent={sourceContent}
           imageName={imageName}
           imagePreview={imagePreview}
+          ideas={ideas}
+          isLinkingIdeas={isLinkingIdeas}
+          linkedIdeaIds={linkedIdeaIds}
           canSave={canSave}
           statusMessage={statusMessage}
           onContentChange={setContent}
           onSourceTypeChange={setSourceType}
           onSourceContentChange={setSourceContent}
+          onToggleLinkingIdeas={handleToggleLinkingIdeas}
+          onApplyLinkedIdeas={setLinkedIdeaIds}
           onImageChange={handleImageChange}
           onKeyDown={handleKeyDown}
           onSave={handleSave}
@@ -142,11 +155,16 @@ interface CaptureViewProps {
   sourceContent: string;
   imageName: string;
   imagePreview: string;
+  ideas: Idea[];
+  isLinkingIdeas: boolean;
+  linkedIdeaIds: string[];
   canSave: boolean;
   statusMessage: string;
   onContentChange: (value: string) => void;
   onSourceTypeChange: (type: SourceType) => void;
   onSourceContentChange: (value: string) => void;
+  onToggleLinkingIdeas: () => void;
+  onApplyLinkedIdeas: (ideaIds: string[]) => void;
   onImageChange: (file: File | undefined) => void;
   onKeyDown: (event: React.KeyboardEvent<HTMLTextAreaElement>) => void;
   onSave: () => void | Promise<void>;
@@ -158,11 +176,16 @@ function CaptureView({
   sourceContent,
   imageName,
   imagePreview,
+  ideas,
+  isLinkingIdeas,
+  linkedIdeaIds,
   canSave,
   statusMessage,
   onContentChange,
   onSourceTypeChange,
   onSourceContentChange,
+  onToggleLinkingIdeas,
+  onApplyLinkedIdeas,
   onImageChange,
   onKeyDown,
   onSave,
@@ -183,7 +206,7 @@ function CaptureView({
 
       <div className="source-header">
         <span>来源</span>
-        <span className="hint">链接、图片或一段文字，三选一即可</span>
+        <span className="hint">链接、图片、文字三选一；也可添加引用</span>
       </div>
 
       <div className="source-tabs" role="group" aria-label="选择来源类型">
@@ -197,6 +220,19 @@ function CaptureView({
         <button className={sourceType === 'text' ? 'active' : ''} onClick={() => onSourceTypeChange('text')} type="button">
           + 文字
         </button>
+        <section className="link-picker" aria-label="引用想法">
+          <button className="link-picker-toggle" onClick={onToggleLinkingIdeas} type="button">
+            + 引用{linkedIdeaIds.length ? `（${linkedIdeaIds.length}）` : ''}
+          </button>
+          {isLinkingIdeas && (
+            <LinkPickerModal
+              ideas={ideas}
+              initialLinkedIdeaIds={linkedIdeaIds}
+              onApply={onApplyLinkedIdeas}
+              onClose={onToggleLinkingIdeas}
+            />
+          )}
+        </section>
       </div>
 
       <SourceInput
@@ -215,6 +251,72 @@ function CaptureView({
       </div>
       {statusMessage && <p className="status-message">{statusMessage}</p>}
     </section>
+  );
+}
+
+interface LinkPickerModalProps {
+  ideas: Idea[];
+  initialLinkedIdeaIds: string[];
+  onApply: (ideaIds: string[]) => void;
+  onClose: () => void;
+}
+
+function LinkPickerModal({ ideas, initialLinkedIdeaIds, onApply, onClose }: LinkPickerModalProps) {
+  const selectedIdsRef = useRef(new Set(initialLinkedIdeaIds));
+  const countRef = useRef<HTMLSpanElement>(null);
+
+  function updateCountLabel() {
+    if (!countRef.current) return;
+    const selectedCount = selectedIdsRef.current.size;
+    countRef.current.textContent = selectedCount ? `已选择 ${selectedCount} 条` : '勾选后，这条新想法会连接到已有想法。';
+  }
+
+  function handleLocalToggle(ideaId: string, checked: boolean) {
+    if (checked) {
+      selectedIdsRef.current.add(ideaId);
+    } else {
+      selectedIdsRef.current.delete(ideaId);
+    }
+    updateCountLabel();
+  }
+
+  function handleDone() {
+    onApply(Array.from(selectedIdsRef.current));
+    onClose();
+  }
+
+  return (
+    <div className="link-modal" role="dialog" aria-modal="true" aria-label="选择引用想法">
+      <button className="link-modal-backdrop" aria-label="关闭引用选择" onClick={onClose} type="button" />
+      <div className="link-modal-content">
+        <div className="link-modal-header">
+          <div>
+            <h2>选择引用想法</h2>
+            <p><span ref={countRef}>{initialLinkedIdeaIds.length ? `已选择 ${initialLinkedIdeaIds.length} 条` : '勾选后，这条新想法会连接到已有想法。'}</span></p>
+          </div>
+          <button className="link-modal-close" onClick={handleDone} type="button">
+            确定引用
+          </button>
+        </div>
+        <div className="link-picker-list">
+          {ideas.length === 0 ? (
+            <span className="hint">暂无可引用的想法</span>
+          ) : (
+            ideas.map((idea) => (
+              <label className="link-picker-item" key={idea.id}>
+                <input
+                  aria-label={`引用想法：${idea.content}`}
+                  defaultChecked={selectedIdsRef.current.has(idea.id)}
+                  onChange={(event) => handleLocalToggle(idea.id, event.target.checked)}
+                  type="checkbox"
+                />
+                <span>{idea.content}</span>
+              </label>
+            ))
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -245,7 +347,7 @@ function TimelineView({
           <div className="day-group" key={group.label}>
             <h2>{group.label}</h2>
             {group.ideas.map((idea) => (
-              <IdeaCard idea={idea} key={idea.id} onDelete={() => onDeleteIdea(idea.id)} />
+              <IdeaCard ideas={ideas} idea={idea} key={idea.id} onDelete={() => onDeleteIdea(idea.id)} />
             ))}
           </div>
         ))
@@ -289,16 +391,49 @@ function SourceInput({ sourceType, sourceContent, imageName, imagePreview, onCha
   );
 }
 
-function IdeaCard({ idea, onDelete }: { idea: Idea; onDelete: () => void }) {
+function IdeaCard({ ideas, idea, onDelete }: { ideas: Idea[]; idea: Idea; onDelete: () => void }) {
+  const [isConfirmingDelete, setIsConfirmingDelete] = useState(false);
+  const [isExpanded, setIsExpanded] = useState(false);
+  const isLongIdea = idea.content.length > 120 || idea.content.includes('\n');
+  const linkedIdeas = (idea.linkedIdeaIds ?? [])
+    .map((linkedId) => ideas.find((candidate) => candidate.id === linkedId))
+    .filter((linkedIdea): linkedIdea is Idea => Boolean(linkedIdea));
+
   return (
-    <article className="idea-card">
+    <article className="idea-card" id={`idea-${idea.id}`}>
       <div className="idea-card-header">
         <time>{formatIdeaTime(idea.createdAt)}</time>
-        <button className="delete-button" onClick={onDelete} type="button" aria-label={`删除想法：${idea.content}`}>
-          删除
-        </button>
+        {isConfirmingDelete ? (
+          <span className="delete-confirm-actions" aria-label="确认删除">
+            <button className="delete-confirm-button" onClick={onDelete} type="button" aria-label={`确认删除想法：${idea.content}`}>
+              确认删除
+            </button>
+            <button className="delete-cancel-button" onClick={() => setIsConfirmingDelete(false)} type="button">
+              取消
+            </button>
+          </span>
+        ) : (
+          <button className="delete-button" onClick={() => setIsConfirmingDelete(true)} type="button" aria-label={`删除想法：${idea.content}`}>
+            删除
+          </button>
+        )}
       </div>
-      <p className="idea-content">{idea.content}</p>
+      <p className={`idea-content ${isLongIdea && !isExpanded ? 'idea-content-collapsed' : ''}`}>{idea.content}</p>
+      {isLongIdea && (
+        <button className="expand-idea-button" onClick={() => setIsExpanded((expanded) => !expanded)} type="button">
+          {isExpanded ? '收起' : '展开全文'}
+        </button>
+      )}
+      {linkedIdeas.length > 0 && (
+        <div className="linked-ideas" aria-label="引用链">
+          <span>引用</span>
+          {linkedIdeas.map((linkedIdea) => (
+            <a href={`#idea-${linkedIdea.id}`} key={linkedIdea.id}>
+              {linkedIdea.content}
+            </a>
+          ))}
+        </div>
+      )}
       {idea.source && <SourcePreview source={idea.source} />}
     </article>
   );
@@ -327,10 +462,12 @@ function SourcePreview({ source }: { source: IdeaSource }) {
 }
 
 function ImageSourcePreview({ source }: { source: Extract<IdeaSource, { type: 'image' }> }) {
-  const [previewUrl, setPreviewUrl] = useState<string>(source.content.startsWith('/uploads/') ? source.content : '');
+  const [previewUrl, setPreviewUrl] = useState('');
+  const [isOpen, setIsOpen] = useState(false);
 
   useEffect(() => {
-    if (source.content.startsWith('/uploads/')) {
+    if (!isOpen) return undefined;
+    if (source.content.startsWith('/')) {
       setPreviewUrl(source.content);
       return undefined;
     }
@@ -345,12 +482,25 @@ function ImageSourcePreview({ source }: { source: Extract<IdeaSource, { type: 'i
     return () => {
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [source.content]);
+  }, [isOpen, source.content]);
 
   return (
     <div className="source-preview image-source">
-      {previewUrl ? <img src={previewUrl} alt={source.fileName || '截图'} /> : <span>🖼 [截图]</span>}
+      <button className="image-open-button" onClick={() => setIsOpen(true)} type="button">
+        🖼 查看图片
+      </button>
       <small>{source.fileName || source.content}</small>
+      {isOpen && (
+        <div className="image-modal" role="dialog" aria-modal="true" aria-label={source.fileName || '截图预览'}>
+          <button className="image-modal-backdrop" onClick={() => setIsOpen(false)} type="button" aria-label="关闭图片预览" />
+          <div className="image-modal-content">
+            <button className="image-modal-close" onClick={() => setIsOpen(false)} type="button">
+              关闭
+            </button>
+            {previewUrl ? <img src={previewUrl} alt={source.fileName || '截图'} /> : <span>正在加载图片...</span>}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
