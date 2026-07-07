@@ -2,7 +2,7 @@
 
 记录想法，也记录它从哪里来。
 
-这是一个 local-first 的极简灵感记录 MVP。它不把自己做成复杂收藏夹，而是先验证一个最小闭环：
+一念是一个极简灵感记录工具。核心目标不是做复杂收藏夹，而是保留一个最小闭环：
 
 > 我看到一个东西 → 产生想法 → 立刻记下来 → 以后还能知道这个想法从哪里来的。
 
@@ -13,59 +13,30 @@
   - 链接
   - 图片
   - 文字
-- 删除想法：在“想法列表”里删除不需要的记录
-- 自动记录时间：保存时自动写入创建/更新时间
-- 独立列表页：已记录内容不堆在首页，通过导航进入“想法列表”查看
+- 引用其他想法：新增想法时可以选择已有想法作为引用，并在列表中展示引用关系
+- 想法列表：通过导航进入列表页查看已记录内容
 - 时间线展示：按今天、昨天、具体日期分组
-- 本地保存：不需要登录，不需要服务器
-- JSON 导出：可以把本地记录导出为备份文件
+- 长内容折叠：较长想法默认折叠为紧凑卡片，可展开全文/收起
+- 删除二次确认：删除前需要再次确认，降低误删风险
+- JSON 导出：可以导出全部记录作为备份
+- 可选服务端模式：可以使用 Node 服务端运行，也可以只使用静态前端版本
 
-## 数据保存在哪里
+## 数据保存
 
-当前版本是纯前端应用，所有数据都保存在浏览器本地：
+一念支持两种运行方式：
+
+### 静态前端模式
+
+适合本地试用或静态站点部署。数据保存在当前浏览器中：
 
 - 想法文本、可选来源、时间戳：LocalStorage
-  - key: `yinian.ideas.v1`
 - 上传图片：IndexedDB
-  - database: `yinian-images`
-  - store: `images`
 
-注意：
+注意：换浏览器、换设备或清理站点数据后，本地记录可能不可见。重要内容建议定期使用“导出 JSON”备份。
 
-- 换浏览器、换设备后看不到原来的记录
-- 清理浏览器站点数据会删除记录
-- GitHub Pages 只托管静态页面，不会保存用户数据
-- 建议定期使用“导出 JSON”备份
+### 服务端模式
 
-## 在线部署
-
-项目已经按 GitHub Pages project site 配置，生产构建路径为：
-
-```text
-/yinian/
-```
-
-当前采用 `gh-pages` 分支部署，避免依赖 GitHub Actions 的 Pages 部署权限。
-
-预期访问地址：
-
-```text
-https://mathewq23.github.io/yinian/
-```
-
-第一次部署后，需要在 GitHub 仓库页面设置 Pages 来源：
-
-```text
-Settings → Pages → Build and deployment → Source → Deploy from a branch
-Branch: gh-pages
-Folder: / (root)
-```
-
-本地重新部署：
-
-```bash
-npm run deploy:pages
-```
+适合需要跨设备或长期运行的场景。服务端模式会通过 Node 服务端提供 API，并由服务端负责保存数据。
 
 ## 本地开发
 
@@ -76,19 +47,61 @@ npm run dev
 
 然后打开 Vite 输出的本地地址。
 
-## 测试与构建
+## 构建
+
+构建静态前端：
+
+```bash
+npm run build
+```
+
+构建服务端版本：
+
+```bash
+npm run build:server
+```
+
+启动服务端：
+
+```bash
+npm run start
+```
+
+## GitHub Pages 静态部署
+
+项目保留 GitHub Pages project site 配置，默认构建路径为：
+
+```text
+/yinian/
+```
+
+部署命令：
+
+```bash
+npm run deploy:pages
+```
+
+如果第一次部署，需要在 GitHub 仓库页面设置 Pages 来源：
+
+```text
+Settings → Pages → Build and deployment → Source → Deploy from a branch
+Branch: gh-pages
+Folder: / (root)
+```
+
+## 测试与构建检查
 
 ```bash
 npm run test
 npm run build
+npm run build:server
 npm run lint
 ```
 
 当前验证结果：
 
-- 测试：6 个测试文件，15 个测试通过
-- 构建：通过
-- Lint：0 warnings / 0 errors
+- 测试：7 个测试文件，22 个测试通过
+- 构建：`npm run build:server` 通过
 
 ## 技术栈
 
@@ -97,8 +110,9 @@ npm run lint
 - Vite
 - Vitest
 - Testing Library
-- LocalStorage
-- IndexedDB
+- Node.js
+- better-sqlite3
+- LocalStorage / IndexedDB fallback
 
 ## 暂时不做什么
 
@@ -113,7 +127,7 @@ npm run lint
 - 视频时间戳解析
 - 网页全文保存
 - 自动截图网页
-- 用户系统
+- 多用户账号系统
 - 社交功能
 - Markdown 编辑器
 
