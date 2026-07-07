@@ -64,6 +64,52 @@ describe('Yinian server API', () => {
     expect(listBody.ideas[0].linkedIdeaIds).toEqual(['idea_a', 'idea_b']);
   });
 
+  it('persists lifecycle metadata on server-created ideas', async () => {
+    const createResponse = await fetch(`${baseUrl}/api/ideas`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        content: '把引用链推进到实践',
+        source: null,
+        lifecycle: { status: 'practicing', practiceLog: [{ text: '先做一个小实验', createdAt: '2026-07-06T00:30:00.000Z' }] },
+      }),
+    });
+
+    expect(createResponse.status).toBe(201);
+    const { idea } = await createResponse.json();
+    expect(idea.lifecycle).toEqual({ status: 'practicing', practiceLog: [{ text: '先做一个小实验', createdAt: '2026-07-06T00:30:00.000Z' }] });
+
+    const listBody = await fetch(`${baseUrl}/api/ideas`).then((response) => response.json());
+    expect(listBody.ideas[0].lifecycle).toEqual(idea.lifecycle);
+  });
+
+  it('updates idea lifecycle over the API without replacing content or references', async () => {
+    const createResponse = await fetch(`${baseUrl}/api/ideas`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ content: '服务器实践链条', source: null, linkedIdeaIds: ['root'] }),
+    });
+    const { idea } = await createResponse.json();
+
+    const updateResponse = await fetch(`${baseUrl}/api/ideas/${idea.id}/lifecycle`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ lifecycle: { status: 'validated', practiceLog: [{ text: '上线后验证有效', createdAt: '2026-07-06T02:00:00.000Z' }] } }),
+    });
+
+    expect(updateResponse.status).toBe(200);
+    const { idea: updatedIdea } = await updateResponse.json();
+    expect(updatedIdea).toMatchObject({
+      id: idea.id,
+      content: '服务器实践链条',
+      linkedIdeaIds: ['root'],
+      lifecycle: { status: 'validated', practiceLog: [{ text: '上线后验证有效', createdAt: '2026-07-06T02:00:00.000Z' }] },
+    });
+
+    const listBody = await fetch(`${baseUrl}/api/ideas`).then((response) => response.json());
+    expect(listBody.ideas[0].lifecycle.status).toBe('validated');
+  });
+
   it('migrates legacy ideas.json into sqlite storage', async () => {
     await new Promise<void>((resolve) => app.server.close(() => resolve()));
     await rm(tempDir, { recursive: true, force: true });

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Idea, IdeaDraft } from './types';
-import { createIdea, formatIdeaTime, groupIdeasByDay } from './ideas';
+import { buildIdeaChainLinks, buildIdeaExtensionTree, createIdea, formatIdeaTime, groupIdeasByDay, updateIdeaLifecycle } from './ideas';
 
 describe('idea domain', () => {
   it('creates a url-sourced idea with automatic timestamps and stable id prefix', () => {
@@ -46,6 +46,68 @@ describe('idea domain', () => {
 
   it('formats timeline time as HH:mm in local time', () => {
     expect(formatIdeaTime('2026-07-05T14:36:00.000Z')).toBe('22:36');
+  });
+
+  it('creates lifecycle metadata for a fresh idea', () => {
+    const idea = createIdea({ content: '把引用发展成实践链条。', source: null }, new Date('2026-07-05T22:40:00+08:00'));
+
+    expect(idea.lifecycle).toEqual({ status: 'seed', practiceLog: [] });
+  });
+
+  it('updates an idea lifecycle with deduplicated practice entries', () => {
+    const idea = ideaAt('从灵感进入实践。', '2026-07-05T09:01:00+08:00');
+
+    const updated = updateIdeaLifecycle(idea, {
+      status: 'practicing',
+      practiceText: '今天先做一个最小页面',
+      now: new Date('2026-07-06T08:30:00+08:00'),
+    });
+    const unchanged = updateIdeaLifecycle(updated, {
+      status: 'practicing',
+      practiceText: '今天先做一个最小页面',
+      now: new Date('2026-07-06T08:45:00+08:00'),
+    });
+
+    expect(unchanged.lifecycle).toEqual({
+      status: 'practicing',
+      practiceLog: [{ text: '今天先做一个最小页面', createdAt: '2026-07-06T00:30:00.000Z' }],
+    });
+    expect(unchanged.updatedAt).toBe('2026-07-06T00:45:00.000Z');
+  });
+
+  it('builds an oldest-to-newest idea chain from references', () => {
+    const root = ideaAt('看见一句话', '2026-07-05T09:01:00+08:00');
+    root.id = 'root';
+    const branch = ideaAt('产生一个想法', '2026-07-05T10:01:00+08:00');
+    branch.id = 'branch';
+    branch.linkedIdeaIds = ['root'];
+    const leaf = ideaAt('实践后继续延伸', '2026-07-05T11:01:00+08:00');
+    leaf.id = 'leaf';
+    leaf.linkedIdeaIds = ['branch'];
+
+    const links = buildIdeaChainLinks([leaf, root, branch], leaf);
+
+    expect(links.map((idea) => idea.id)).toEqual(['root', 'branch', 'leaf']);
+  });
+
+  it('builds a visual extension tree from one idea to all descendants', () => {
+    const root = ideaAt('源头：部署到公网', '2026-07-05T09:01:00+08:00');
+    root.id = 'root';
+    const feature = ideaAt('延伸：添加想法链条', '2026-07-05T10:01:00+08:00');
+    feature.id = 'feature';
+    feature.linkedIdeaIds = ['root'];
+    const fix = ideaAt('实践：修复空白页', '2026-07-05T11:01:00+08:00');
+    fix.id = 'fix';
+    fix.linkedIdeaIds = ['feature'];
+    const sibling = ideaAt('延伸：添加数据库', '2026-07-05T09:30:00+08:00');
+    sibling.id = 'sibling';
+    sibling.linkedIdeaIds = ['root'];
+
+    const tree = buildIdeaExtensionTree([fix, sibling, feature, root], root);
+
+    expect(tree.idea.id).toBe('root');
+    expect(tree.children.map((child) => child.idea.id)).toEqual(['sibling', 'feature']);
+    expect(tree.children[1].children.map((child) => child.idea.id)).toEqual(['fix']);
   });
 });
 

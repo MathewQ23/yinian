@@ -31,6 +31,12 @@ export function deleteIdea(ideaId: string): Idea[] {
   return ideas;
 }
 
+export function updateIdea(updatedIdea: Idea): Idea[] {
+  const ideas = sortIdeas(loadIdeas().map((idea) => (idea.id === updatedIdea.id ? updatedIdea : idea)));
+  saveIdeas(ideas);
+  return ideas;
+}
+
 function sortIdeas(ideas: Idea[]): Idea[] {
   return [...ideas].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }

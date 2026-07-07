@@ -12,6 +12,7 @@ dist
 dist-ssr
 server-data
 *.local
+yinian-ideas-*.json
 
 # Editor directories and files
 .vscode/*

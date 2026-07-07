@@ -28,7 +28,7 @@ export async function fetchServerIdeas(): Promise<Idea[]> {
   return body.ideas;
 }
 
-export async function createServerIdea(input: { content: string; source: IdeaSource | null; linkedIdeaIds?: string[] }): Promise<Idea> {
+export async function createServerIdea(input: { content: string; source: IdeaSource | null; linkedIdeaIds?: string[]; lifecycle?: Idea['lifecycle'] }): Promise<Idea> {
   const response = await fetch(`${apiBase}/ideas`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -42,6 +42,17 @@ export async function createServerIdea(input: { content: string; source: IdeaSou
 export async function deleteServerIdea(ideaId: string): Promise<void> {
   const response = await fetch(`${apiBase}/ideas/${encodeURIComponent(ideaId)}`, { method: 'DELETE' });
   if (!response.ok) throw new Error(`Failed to delete idea: ${response.status}`);
+}
+
+export async function updateServerIdeaLifecycle(ideaId: string, lifecycle: Idea['lifecycle']): Promise<Idea> {
+  const response = await fetch(`${apiBase}/ideas/${encodeURIComponent(ideaId)}/lifecycle`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ lifecycle }),
+  });
+  if (!response.ok) throw new Error(`Failed to update idea lifecycle: ${response.status}`);
+  const body = (await response.json()) as IdeaResponse;
+  return body.idea;
 }
 
 export async function uploadImageToServer(file: File): Promise<UploadResponse> {

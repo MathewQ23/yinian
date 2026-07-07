@@ -60,6 +60,16 @@ export function createYinianServer(options = {}) {
     db.prepare('DELETE FROM ideas WHERE id = ?').run(id);
   }
 
+  async function updateIdeaLifecycle(id, lifecycle) {
+    await ensureStorage();
+    const row = db.prepare('SELECT id, content, source_json, created_at, updated_at FROM ideas WHERE id = ?').get(id);
+    if (!row) return null;
+    const idea = rowToIdea(row);
+    const updatedIdea = { ...idea, lifecycle: normalizeLifecycle(lifecycle), updatedAt: new Date().toISOString() };
+    await saveIdea(updatedIdea);
+    return updatedIdea;
+  }
+
   async function readJsonBody(req) {
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
@@ -92,11 +102,21 @@ export function createYinianServer(options = {}) {
         content: String(body.content).trim(),
         source: body.source ?? null,
         linkedIdeaIds: normalizeLinkedIdeaIds(body.linkedIdeaIds),
+        lifecycle: normalizeLifecycle(body.lifecycle),
         createdAt: body.createdAt || now,
         updatedAt: body.updatedAt || now,
       };
       await saveIdea(idea);
       return sendJson(res, 201, { idea });
+    }
+
+    const lifecycleMatch = url.pathname.match(/^\/api\/ideas\/([^/]+)\/lifecycle$/);
+    if (req.method === 'PATCH' && lifecycleMatch) {
+      const id = decodeURIComponent(lifecycleMatch[1]);
+      const body = await readJsonBody(req);
+      const idea = await updateIdeaLifecycle(id, body.lifecycle);
+      if (!idea) return sendJson(res, 404, { error: 'not found' });
+      return sendJson(res, 200, { idea });
     }
 
     const deleteMatch = url.pathname.match(/^\/api\/ideas\/([^/]+)$/);
@@ -204,6 +224,7 @@ export function createYinianServer(options = {}) {
           content: String(idea.content),
           source: idea.source ?? null,
           linkedIdeaIds: normalizeLinkedIdeaIds(idea.linkedIdeaIds),
+          lifecycle: normalizeLifecycle(idea.lifecycle),
           createdAt: idea.createdAt || new Date().toISOString(),
           updatedAt: idea.updatedAt || idea.createdAt || new Date().toISOString(),
         }));
@@ -219,9 +240,8 @@ function readFileSyncUtf8(filePath) {
 
 function ideaToRow(idea) {
   const linkedIdeaIds = normalizeLinkedIdeaIds(idea.linkedIdeaIds);
-  const sourceJson = linkedIdeaIds.length
-    ? JSON.stringify({ source: idea.source ?? null, linkedIdeaIds })
-    : idea.source == null ? null : JSON.stringify(idea.source);
+  const lifecycle = normalizeLifecycle(idea.lifecycle);
+  const sourceJson = JSON.stringify({ source: idea.source ?? null, linkedIdeaIds, lifecycle });
 
   return {
     id: idea.id,
@@ -242,6 +262,7 @@ function rowToIdea(row) {
     content: row.content,
     source: isEnvelope ? parsed.source : parsed,
     ...(linkedIdeaIds.length ? { linkedIdeaIds } : {}),
+    lifecycle: normalizeLifecycle(isEnvelope ? parsed.lifecycle : undefined),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -250,6 +271,16 @@ function rowToIdea(row) {
 function normalizeLinkedIdeaIds(value) {
   if (!Array.isArray(value)) return [];
   return [...new Set(value.map((id) => String(id).trim()).filter(Boolean))];
+}
+
+function normalizeLifecycle(value) {
+  const status = ['seed', 'practicing', 'validated', 'paused'].includes(value?.status) ? value.status : 'seed';
+  const practiceLog = Array.isArray(value?.practiceLog)
+    ? value.practiceLog
+        .map((entry) => ({ text: String(entry?.text ?? '').trim(), createdAt: String(entry?.createdAt ?? '') }))
+        .filter((entry) => entry.text && entry.createdAt)
+    : [];
+  return { status, practiceLog };
 }
 
 function normalizeBasePath(value) {
@@ -271,7 +302,8 @@ function extensionForMime(mimeType, originalName) {
 if (import.meta.url === `file://${process.argv[1]}`) {
   const app = createYinianServer();
   await app.ensureStorage();
-  app.server.listen(app.port, '127.0.0.1', () => {
-    console.log(`Yinian server listening on http://127.0.0.1:${app.port}`);
+  const host = process.env.HOST || '127.0.0.1';
+  app.server.listen(app.port, host, () => {
+    console.log(`Yinian server listening on http://${host}:${app.port}`);
   });
 }

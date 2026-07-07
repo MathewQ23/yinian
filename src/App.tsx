@@ -1,11 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import './App.css';
-import { createIdea, formatIdeaTime, groupIdeasByDay, urlHost } from './ideas';
+import './design-system.css';
+import { buildIdeaExtensionTree, countIdeaExtensionDescendants, createIdea, formatIdeaTime, groupIdeasByDay, lifecycleLabel, updateIdeaLifecycle, urlHost } from './ideas';
 import { downloadIdeasExport } from './exportIdeas';
-import { createServerIdea, deleteServerIdea, fetchServerIdeas, uploadImageToServer } from './api';
-import { addIdea, deleteIdea, loadIdeas } from './ideaStorage';
+import { createServerIdea, deleteServerIdea, fetchServerIdeas, updateServerIdeaLifecycle, uploadImageToServer } from './api';
+import { addIdea, deleteIdea, loadIdeas, updateIdea } from './ideaStorage';
 import { getImage, saveImage } from './imageStore';
-import type { Idea, IdeaSource, SourceType } from './types';
+import type { Idea, IdeaExtensionNode, IdeaLifecycleStatus, IdeaSource, SourceType } from './types';
 
 function App() {
   const [ideas, setIdeas] = useState<Idea[]>([]);
@@ -17,7 +18,7 @@ function App() {
   const [isSavingImage, setIsSavingImage] = useState(false);
   const [isLinkingIdeas, setIsLinkingIdeas] = useState(false);
   const [linkedIdeaIds, setLinkedIdeaIds] = useState<string[]>([]);
-  const [activeView, setActiveView] = useState<'capture' | 'list'>('capture');
+  const [activeView, setActiveView] = useState<'capture' | 'list' | 'chains'>('capture');
   const [statusMessage, setStatusMessage] = useState('');
 
   useEffect(() => {
@@ -105,6 +106,19 @@ function App() {
     }
   }
 
+  function handleUpdateIdeaLifecycle(ideaId: string, status: IdeaLifecycleStatus, practiceText?: string) {
+    setIdeas((currentIdeas) => {
+      const targetIdea = currentIdeas.find((idea) => idea.id === ideaId);
+      if (!targetIdea) return currentIdeas;
+      const nextIdea = updateIdeaLifecycle(targetIdea, { status, practiceText });
+      updateIdea(nextIdea);
+      updateServerIdeaLifecycle(ideaId, nextIdea.lifecycle).catch(() => {
+        // LocalStorage fallback keeps lifecycle edits available in static/offline mode.
+      });
+      return currentIdeas.map((idea) => (idea.id === ideaId ? nextIdea : idea));
+    });
+  }
+
   return (
     <main className="app-shell">
       <section className="hero-panel">
@@ -117,6 +131,9 @@ function App() {
           </button>
           <button aria-current={activeView === 'list' ? 'page' : undefined} onClick={() => setActiveView('list')} type="button">
             想法列表
+          </button>
+          <button aria-current={activeView === 'chains' ? 'page' : undefined} onClick={() => setActiveView('chains')} type="button">
+            想法链条
           </button>
         </nav>
       </section>
@@ -142,8 +159,10 @@ function App() {
           onKeyDown={handleKeyDown}
           onSave={handleSave}
         />
+      ) : activeView === 'list' ? (
+        <TimelineView ideas={ideas} groups={groups} onDeleteIdea={(ideaId) => void handleDeleteIdea(ideaId)} onUpdateLifecycle={handleUpdateIdeaLifecycle} />
       ) : (
-        <TimelineView ideas={ideas} groups={groups} onDeleteIdea={(ideaId) => void handleDeleteIdea(ideaId)} />
+        <ChainsView ideas={ideas} onCreateIdea={() => setActiveView('capture')} />
       )}
     </main>
   );
@@ -324,10 +343,12 @@ function TimelineView({
   ideas,
   groups,
   onDeleteIdea,
+  onUpdateLifecycle,
 }: {
   ideas: Idea[];
   groups: ReturnType<typeof groupIdeasByDay>;
   onDeleteIdea: (ideaId: string) => void;
+  onUpdateLifecycle: (ideaId: string, status: IdeaLifecycleStatus, practiceText?: string) => void;
 }) {
   return (
     <section className="timeline" aria-label="想法时间线">
@@ -347,13 +368,286 @@ function TimelineView({
           <div className="day-group" key={group.label}>
             <h2>{group.label}</h2>
             {group.ideas.map((idea) => (
-              <IdeaCard ideas={ideas} idea={idea} key={idea.id} onDelete={() => onDeleteIdea(idea.id)} />
+              <IdeaCard ideas={ideas} idea={idea} key={idea.id} onDelete={() => onDeleteIdea(idea.id)} onUpdateLifecycle={onUpdateLifecycle} />
             ))}
           </div>
         ))
       )}
     </section>
   );
+}
+
+function ChainsView({ ideas, onCreateIdea }: { ideas: Idea[]; onCreateIdea: () => void }) {
+  const [selectedIdeaId, setSelectedIdeaId] = useState<string>('');
+  const sortedIdeas = useMemo(() => [...ideas].sort((a, b) => b.createdAt.localeCompare(a.createdAt)), [ideas]);
+  const ideaNumberMap = useMemo(() => buildIdeaNumberMap(ideas), [ideas]);
+  const linkedIds = new Set(ideas.flatMap((idea) => idea.linkedIdeaIds ?? []));
+  const rootIdeas = ideas
+    .filter((idea) => !(idea.linkedIdeaIds ?? []).some((linkedId) => ideas.some((candidate) => candidate.id === linkedId)))
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  const rootCount = rootIdeas.length;
+  const selectedIdea = sortedIdeas.find((idea) => idea.id === selectedIdeaId) ?? sortedIdeas.find((idea) => (idea.linkedIdeaIds ?? []).length > 0) ?? sortedIdeas[0];
+  const selectedRoot = selectedIdea ? findChainRoot(ideas, selectedIdea) : undefined;
+  const selectedTree = selectedRoot ? buildIdeaExtensionTree(ideas, selectedRoot) : undefined;
+  const sourceIdeas = selectedIdea ? getLinkedIdeas(ideas, selectedIdea) : [];
+  const extensionIdeas = selectedIdea ? getReferencingIdeas(ideas, selectedIdea) : [];
+
+  useEffect(() => {
+    if (!selectedIdeaId && sortedIdeas[0]) {
+      setSelectedIdeaId(sortedIdeas.find((idea) => (idea.linkedIdeaIds ?? []).length > 0)?.id ?? sortedIdeas[0].id);
+    }
+    if (selectedIdeaId && !sortedIdeas.some((idea) => idea.id === selectedIdeaId)) {
+      setSelectedIdeaId(sortedIdeas[0]?.id ?? '');
+    }
+  }, [selectedIdeaId, sortedIdeas]);
+
+  return (
+    <section className="chain-workspace" aria-label="集中想法链条">
+      <div className="timeline-toolbar chain-page-toolbar">
+        <div>
+          <h2>想法链条</h2>
+          <p>集中查看每条想法如何继续长出后续分支。</p>
+        </div>
+        <div className="chain-actions">
+          <label className="chain-search">
+            <span aria-hidden="true">⌕</span>
+            <input placeholder="搜索想法、关键词…" aria-label="搜索想法、关键词" />
+          </label>
+          <button className="save-button" onClick={onCreateIdea} type="button">
+            新建想法 ＋
+          </button>
+        </div>
+      </div>
+
+      {ideas.length === 0 ? (
+        <div className="empty-state">还没有想法。先记录一个源头，再从引用里长出分支。</div>
+      ) : (
+        <div className="chain-three-column">
+          <aside className="chain-panel chain-list-panel" aria-label="想法时间线列表">
+            <div className="chain-panel-title">
+              <h2>想法列表</h2>
+              <button className="icon-button" type="button" aria-label="筛选或排序想法">☷</button>
+            </div>
+            <div className="chain-timeline-list">
+              {sortedIdeas.map((idea) => (
+                <button
+                  className={idea.id === selectedIdea?.id ? 'chain-list-item selected' : 'chain-list-item'}
+                  key={idea.id}
+                  onClick={() => setSelectedIdeaId(idea.id)}
+                  type="button"
+                >
+                  <span className="timeline-dot" aria-hidden="true" />
+                  <time>{formatIdeaTime(idea.createdAt)}</time>
+                  <strong>{formatIdeaNumber(idea, ideaNumberMap)} {ideaTitle(idea)}</strong>
+                  <span>{ideaSummary(idea)}</span>
+                </button>
+              ))}
+            </div>
+            <div className="chain-list-footer">共 {ideas.length} 个想法</div>
+          </aside>
+
+          <section className="chain-panel chain-map-panel" aria-label="想法链条可视化">
+            <div className="chain-panel-title chain-map-toolbar">
+              <h3>链条画布</h3>
+              <div className="map-controls" aria-label="链条视图控制">
+                <button type="button">居中</button>
+                <button type="button" aria-label="缩小">−</button>
+                <span>100%</span>
+                <button type="button" aria-label="放大">＋</button>
+                <button type="button" aria-label="适配视图">⛶</button>
+              </div>
+            </div>
+            <strong className="chain-count">{rootCount} 条根想法</strong>
+            <div className="chain-canvas">
+              {rootIdeas.map((idea) => {
+                const tree = buildIdeaExtensionTree(ideas, idea);
+                const extensionCount = countIdeaExtensionDescendants(tree);
+                return (
+                  <section className="chain-overview-card chain-visually-present" aria-label={`集中链条：${idea.content}`} key={idea.id}>
+                    <div className="chain-overview-header">
+                      <span>{linkedIds.has(idea.id) ? '中间节点' : '根想法'}</span>
+                      <strong>{extensionCount ? `延伸 ${extensionCount} 个想法` : '暂无延伸'}</strong>
+                    </div>
+                    <IdeaExtensionNodeView node={tree} depth={0} />
+                  </section>
+                );
+              })}
+              {selectedTree && (
+                <VisualChainNode
+                  node={selectedTree}
+                  selectedIdeaId={selectedIdea?.id ?? ''}
+                  ideaNumberMap={ideaNumberMap}
+                  depth={0}
+                  relation="起点"
+                  onSelect={setSelectedIdeaId}
+                />
+              )}
+            </div>
+            <div className="chain-legend" aria-label="链条图例">
+              <span><i className="legend-dot" />起点</span>
+              <span><i className="legend-line solid" />引用关系</span>
+              <span><i className="legend-line warm" />延伸关系</span>
+              <span><i className="legend-line dashed" />并行参考</span>
+              <span><i className="legend-badge" />被引用</span>
+            </div>
+          </section>
+
+          <aside className="chain-panel chain-detail-panel" aria-label="想法详情">
+            <div className="chain-panel-title">
+              <h2>想法详情</h2>
+              <div className="detail-icons">
+                <button className="icon-button" type="button" aria-label="固定当前详情">⌖</button>
+                <button className="icon-button" type="button" aria-label="更多操作">⋯</button>
+              </div>
+            </div>
+            {selectedIdea && (
+              <div className="detail-body">
+                <span className="detail-kicker">{formatIdeaNumber(selectedIdea, ideaNumberMap)} {formatIdeaTime(selectedIdea.createdAt)}</span>
+                <h3>{ideaTitle(selectedIdea)}</h3>
+                <p className="detail-content">{selectedIdea.content}</p>
+                <section className="detail-section">
+                  <h4>创建时间</h4>
+                  <p>{formatFullDate(selectedIdea.createdAt)}</p>
+                </section>
+                <section className="detail-section">
+                  <h4>来源预览</h4>
+                  {sourceIdeas[0] ? (
+                    <button className="source-mini-card" onClick={() => setSelectedIdeaId(sourceIdeas[0].id)} type="button">
+                      <strong>{formatIdeaNumber(sourceIdeas[0], ideaNumberMap)} {ideaTitle(sourceIdeas[0])}</strong>
+                      <span>{ideaSummary(sourceIdeas[0])}</span>
+                      <time>{formatIdeaTime(sourceIdeas[0].createdAt)}</time>
+                    </button>
+                  ) : selectedIdea.source ? (
+                    <SourcePreview source={selectedIdea.source} />
+                  ) : (
+                    <p className="muted-text">暂无来源，这条想法可以作为链条起点。</p>
+                  )}
+                </section>
+                <section className="detail-section relation-section">
+                  <h4>引用关系</h4>
+                  <span className="relation-label">来源</span>
+                  {sourceIdeas.length ? sourceIdeas.map((idea) => (
+                    <RelationRow idea={idea} ideaNumberMap={ideaNumberMap} key={idea.id} onSelect={setSelectedIdeaId} />
+                  )) : <p className="muted-text">无上游来源</p>}
+                  <span className="relation-label">延伸</span>
+                  {extensionIdeas.length ? extensionIdeas.map((idea) => (
+                    <RelationRow idea={idea} ideaNumberMap={ideaNumberMap} key={idea.id} onSelect={setSelectedIdeaId} />
+                  )) : <p className="muted-text">还没有想法引用它</p>}
+                </section>
+                <div className="detail-action-stack">
+                  <button className="primary-detail-action" onClick={onCreateIdea} type="button">🔗 引用这个想法</button>
+                  <button className="secondary-detail-action" type="button">＋ 加入链条</button>
+                </div>
+              </div>
+            )}
+          </aside>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function VisualChainNode({
+  node,
+  selectedIdeaId,
+  ideaNumberMap,
+  depth,
+  relation,
+  onSelect,
+}: {
+  node: IdeaExtensionNode;
+  selectedIdeaId: string;
+  ideaNumberMap: Map<string, number>;
+  depth: number;
+  relation: string;
+  onSelect: (ideaId: string) => void;
+}) {
+  const extensionCount = countIdeaExtensionDescendants(node);
+  const isSelected = node.idea.id === selectedIdeaId;
+  const hasBranches = node.children.length > 1;
+  return (
+    <div className={`visual-node-wrap depth-${Math.min(depth, 2)} ${hasBranches ? 'branching' : ''}`}>
+      <button className={isSelected ? 'visual-node selected' : 'visual-node'} onClick={() => onSelect(node.idea.id)} type="button">
+        <span className="node-meta">{formatIdeaNumber(node.idea, ideaNumberMap)} {formatIdeaTime(node.idea.createdAt)}</span>
+        <strong>{ideaTitle(node.idea)}</strong>
+        <span className="node-summary">{ideaSummary(node.idea)}</span>
+        <span className="node-tags"><i>{relation}</i>{extensionCount > 0 && <i>被 {extensionCount} 个想法引用</i>}</span>
+      </button>
+      {node.children.length > 0 && (
+        <div className={node.children.length > 1 ? 'visual-children split' : 'visual-children'}>
+          {node.children.map((child, index) => (
+            <VisualChainNode
+              depth={depth + 1}
+              ideaNumberMap={ideaNumberMap}
+              key={child.idea.id}
+              node={child}
+              onSelect={onSelect}
+              relation={index === 0 ? `延伸自 ${formatIdeaNumber(node.idea, ideaNumberMap)}` : '并行参考'}
+              selectedIdeaId={selectedIdeaId}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RelationRow({ idea, ideaNumberMap, onSelect }: { idea: Idea; ideaNumberMap: Map<string, number>; onSelect: (ideaId: string) => void }) {
+  return (
+    <button className="relation-row" onClick={() => onSelect(idea.id)} type="button">
+      <span><strong>{formatIdeaNumber(idea, ideaNumberMap)} {ideaTitle(idea)}</strong><time>{formatIdeaTime(idea.createdAt)}</time></span>
+      <b aria-hidden="true">›</b>
+    </button>
+  );
+}
+
+function buildIdeaNumberMap(ideas: Idea[]): Map<string, number> {
+  return new Map([...ideas].sort((a, b) => a.createdAt.localeCompare(b.createdAt)).map((idea, index) => [idea.id, index + 1]));
+}
+
+function formatIdeaNumber(idea: Idea, ideaNumberMap: Map<string, number>): string {
+  return `#${String(ideaNumberMap.get(idea.id) ?? 1).padStart(2, '0')}`;
+}
+
+function ideaTitle(idea: Idea): string {
+  const firstLine = idea.content.split('\n').find(Boolean) ?? idea.content;
+  return firstLine.length > 28 ? `${firstLine.slice(0, 28)}…` : firstLine;
+}
+
+function ideaSummary(idea: Idea): string {
+  const text = idea.content.replace(/\s+/g, ' ').trim();
+  if (text.length <= 48) return text;
+  return `${text.slice(0, 48)}…`;
+}
+
+function formatFullDate(isoTime: string): string {
+  const date = new Date(isoTime);
+  const parts = new Intl.DateTimeFormat('zh-CN', {
+    year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Shanghai'
+  }).formatToParts(date);
+  const value = (type: string) => parts.find((part) => part.type === type)?.value ?? '';
+  return `${value('year')} / ${value('month')} / ${value('day')} ${value('hour')}:${value('minute')}`;
+}
+
+function getLinkedIdeas(ideas: Idea[], idea: Idea): Idea[] {
+  return (idea.linkedIdeaIds ?? []).map((linkedId) => ideas.find((candidate) => candidate.id === linkedId)).filter((candidate): candidate is Idea => Boolean(candidate));
+}
+
+function getReferencingIdeas(ideas: Idea[], idea: Idea): Idea[] {
+  return ideas.filter((candidate) => (candidate.linkedIdeaIds ?? []).includes(idea.id)).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+}
+
+function findChainRoot(ideas: Idea[], idea: Idea): Idea {
+  const ideasById = new Map(ideas.map((candidate) => [candidate.id, candidate]));
+  let current = idea;
+  const seen = new Set<string>();
+  while ((current.linkedIdeaIds ?? []).length > 0 && !seen.has(current.id)) {
+    seen.add(current.id);
+    const parent = current.linkedIdeaIds?.map((id) => ideasById.get(id)).find(Boolean);
+    if (!parent) break;
+    current = parent;
+  }
+  return current;
 }
 
 interface SourceInputProps {
@@ -391,13 +685,37 @@ function SourceInput({ sourceType, sourceContent, imageName, imagePreview, onCha
   );
 }
 
-function IdeaCard({ ideas, idea, onDelete }: { ideas: Idea[]; idea: Idea; onDelete: () => void }) {
+function IdeaCard({
+  ideas,
+  idea,
+  onDelete,
+  onUpdateLifecycle,
+}: {
+  ideas: Idea[];
+  idea: Idea;
+  onDelete: () => void;
+  onUpdateLifecycle: (ideaId: string, status: IdeaLifecycleStatus, practiceText?: string) => void;
+}) {
   const [isConfirmingDelete, setIsConfirmingDelete] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
+  const [practiceText, setPracticeText] = useState('');
   const isLongIdea = idea.content.length > 120 || idea.content.includes('\n');
   const linkedIdeas = (idea.linkedIdeaIds ?? [])
     .map((linkedId) => ideas.find((candidate) => candidate.id === linkedId))
     .filter((linkedIdea): linkedIdea is Idea => Boolean(linkedIdea));
+  const extensionTree = buildIdeaExtensionTree(ideas, idea);
+  const extensionCount = countIdeaExtensionDescendants(extensionTree);
+  const lifecycle = idea.lifecycle ?? { status: 'seed' as const, practiceLog: [] };
+
+  function handleStatusChange(status: IdeaLifecycleStatus) {
+    onUpdateLifecycle(idea.id, status);
+  }
+
+  function handleAddPractice() {
+    if (!practiceText.trim()) return;
+    onUpdateLifecycle(idea.id, lifecycle.status, practiceText);
+    setPracticeText('');
+  }
 
   return (
     <article className="idea-card" id={`idea-${idea.id}`}>
@@ -434,8 +752,69 @@ function IdeaCard({ ideas, idea, onDelete }: { ideas: Idea[]; idea: Idea; onDele
           ))}
         </div>
       )}
+      {extensionCount > 0 && <IdeaExtensionGraph node={extensionTree} extensionCount={extensionCount} />}
+      <section className="lifecycle-panel" aria-label={`生命周期：${idea.content}`}>
+        <div className="lifecycle-panel-header">
+          <span>生命周期</span>
+          <strong>{lifecycleLabel(lifecycle.status)}</strong>
+        </div>
+        <div className="lifecycle-editor">
+          <label>
+            状态
+            <select aria-label={`更新生命周期：${idea.content}`} value={lifecycle.status} onChange={(event) => handleStatusChange(event.target.value as IdeaLifecycleStatus)}>
+              <option value="seed">萌芽</option>
+              <option value="practicing">实践中</option>
+              <option value="validated">已验证</option>
+              <option value="paused">暂停</option>
+            </select>
+          </label>
+          <label>
+            实践记录
+            <textarea aria-label={`实践记录：${idea.content}`} value={practiceText} onChange={(event) => setPracticeText(event.target.value)} placeholder="实践之后补一句：发生了什么、学到了什么……" rows={2} />
+          </label>
+          <button onClick={handleAddPractice} type="button" aria-label={`添加实践记录：${idea.content}`}>
+            添加实践记录
+          </button>
+        </div>
+        {lifecycle.practiceLog.length > 0 && (
+          <ul className="practice-log">
+            {lifecycle.practiceLog.map((entry) => (
+              <li key={`${entry.createdAt}-${entry.text}`}>{entry.text}</li>
+            ))}
+          </ul>
+        )}
+      </section>
       {idea.source && <SourcePreview source={idea.source} />}
     </article>
+  );
+}
+
+function IdeaExtensionGraph({ node, extensionCount }: { node: IdeaExtensionNode; extensionCount: number }) {
+  return (
+    <section className="extension-graph" aria-label={`延伸可视化：${node.idea.content}`}>
+      <div className="extension-graph-header">
+        <span>延伸可视化</span>
+        <strong>延伸 {extensionCount} 个想法</strong>
+      </div>
+      <IdeaExtensionNodeView node={node} depth={0} />
+    </section>
+  );
+}
+
+function IdeaExtensionNodeView({ node, depth }: { node: IdeaExtensionNode; depth: number }) {
+  return (
+    <div className="extension-node" style={{ '--depth': depth } as CSSProperties}>
+      <a className="extension-node-card" href={`#idea-${node.idea.id}`}>
+        {node.idea.content}
+      </a>
+      {node.children.length > 0 && (
+        <div className="extension-children">
+          {node.children.map((child) => (
+            <IdeaExtensionNodeView depth={depth + 1} key={child.idea.id} node={child} />
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
