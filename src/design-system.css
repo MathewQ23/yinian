@@ -1,5 +1,4 @@
-/* Unified product design system for 一念.
-   Purpose: keep capture, list, and chain workspace visually consistent. */
+/* Unified product design system for 一念. */
 :root {
   --yn-bg: oklch(96.8% 0.009 74);
   --yn-surface: oklch(99.3% 0.006 74);
@@ -28,9 +27,7 @@
   --yn-focus: color-mix(in oklch, var(--yn-accent) 44%, transparent);
 }
 
-body {
-  background: linear-gradient(180deg, oklch(99.2% 0.004 74) 0%, var(--yn-bg) 100%);
-}
+body { background: var(--yn-bg); }
 
 button,
 a,
@@ -55,7 +52,6 @@ button,
 .explore-card,
 .entry-row,
 .quick-action-grid button,
-.chain-node,
 .search-result-item {
   transition: background 160ms ease, border-color 160ms ease, color 160ms ease, transform 160ms ease, box-shadow 160ms ease;
 }
@@ -65,7 +61,6 @@ button:hover:not(:disabled),
 .explore-mini-card:hover,
 .explore-card:hover,
 .entry-row:hover,
-.chain-node:hover,
 .search-result-item:hover {
   transform: translateY(-1px);
 }
@@ -84,15 +79,13 @@ input::placeholder {
   color: var(--yn-muted);
 }
 
-.panel:hover,
 .compact-thread-card:hover,
 .explore-mini-card:hover,
 .explore-card:hover,
 .entry-row:hover,
-.chain-node:hover,
 .search-result-item:hover {
   border-color: var(--yn-line-strong);
-  box-shadow: var(--yn-shadow-raised);
+  box-shadow: var(--yn-shadow-soft);
 }
 
 .badge,
@@ -115,6 +108,9 @@ input::placeholder {
     min-height: 42px;
   }
 
+  .brand-mark { align-self: flex-start; }
+  .global-quick-button { margin-left: auto; }
+
   .global-nav {
     order: 3;
     width: 100%;
@@ -124,7 +120,8 @@ input::placeholder {
 
   .global-nav button {
     flex: 0 0 auto;
-    padding: 10px 8px 12px;
+    min-height: 44px;
+    padding: 10px 9px 12px;
   }
 
   .product-main {
@@ -141,8 +138,7 @@ input::placeholder {
   .compact-thread-card,
   .explore-mini-card,
   .explore-card,
-  .entry-row,
-  .chain-node {
+  .entry-row {
     border-radius: var(--yn-radius-md);
   }
 
@@ -151,7 +147,6 @@ input::placeholder {
   .threads-layout,
   .detail-layout,
   .three-column-layout,
-  .chain-layout,
   .continue-grid,
   .threads-grid,
   .summary-cards,
@@ -164,8 +159,7 @@ input::placeholder {
 
   .page-action-row,
   .quick-footer,
-  .thread-header div,
-  .chain-canvas-title {
+  .thread-header div {
     align-items: stretch;
     flex-direction: column;
   }
@@ -175,19 +169,15 @@ input::placeholder {
     overflow-x: auto;
   }
 
-  .entry-row,
-  .entry-list.compact .entry-row {
+  .entry-row {
     grid-template-columns: 52px 1fr auto;
   }
 
-  .chain-canvas {
-    min-height: 420px;
-    padding: 18px;
-  }
+  .quick-source-row { grid-template-columns: 1fr; }
+  .thread-card footer button:first-of-type { margin-left: 0; }
+  .record-detail-backdrop, .thread-edit-backdrop { padding: 12px; }
+  .record-detail-dialog, .thread-edit-form { max-height: calc(100vh - 24px); }
 
-  .chain-children {
-    flex-direction: column;
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -8,6 +8,13 @@ import Database from 'better-sqlite3';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..');
+const productSeed = JSON.parse(readFileSync(path.join(__dirname, 'product-seed.json'), 'utf8'));
+const PRODUCT_KEYS = {
+  'yinian.product.threads': 'threads',
+  'yinian.product.entries': 'entries',
+  'yinian.product.exploreItems': 'explore_items',
+};
+const IDEAS_KEY = 'yinian.ideas.v1';
 
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -23,7 +30,7 @@ const MIME_TYPES = {
 
 export function createYinianServer(options = {}) {
   const port = Number(options.port ?? process.env.PORT ?? 3010);
-  const basePath = normalizeBasePath(options.basePath ?? process.env.YINIAN_BASE_PATH ?? '');
+  const basePath = normalizeBasePath(options.basePath ?? process.env.YINIAN_BASE_PATH ?? '/yinian');
   const dataDir = path.resolve(options.dataDir ?? process.env.YINIAN_DATA_DIR ?? path.join(rootDir, 'server-data'));
   const uploadDir = path.resolve(options.uploadDir ?? process.env.YINIAN_UPLOAD_DIR ?? path.join(dataDir, 'uploads'));
   const publicDir = path.resolve(options.publicDir ?? process.env.YINIAN_PUBLIC_DIR ?? path.join(rootDir, 'dist'));
@@ -70,6 +77,49 @@ export function createYinianServer(options = {}) {
     return updatedIdea;
   }
 
+  async function readProduct() {
+    await ensureStorage();
+    return { threads: readEntities('threads'), entries: readEntities('entries'), exploreItems: readEntities('explore_items') };
+  }
+
+  function readEntities(table) {
+    return db.prepare(`SELECT data_json FROM ${table} ORDER BY position`).all().map((row) => JSON.parse(row.data_json));
+  }
+
+  function getEntity(table, id) {
+    const row = db.prepare(`SELECT data_json FROM ${table} WHERE id = ?`).get(id);
+    return row ? JSON.parse(row.data_json) : null;
+  }
+
+  function nextPosition(table) {
+    return db.prepare(`SELECT COALESCE(MAX(position), -1) + 1 AS value FROM ${table}`).get().value;
+  }
+
+  function saveEntity(table, entity, position) {
+    db.prepare(`INSERT INTO ${table} (id, data_json, position) VALUES (?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET data_json = excluded.data_json, position = excluded.position`)
+      .run(entity.id, JSON.stringify(entity), position ?? nextPosition(table));
+  }
+
+  function prependEntity(table, entity) {
+    db.transaction(() => {
+      db.prepare(`UPDATE ${table} SET position = position + 1`).run();
+      saveEntity(table, entity, 0);
+    })();
+  }
+
+  function replaceEntities(table, entities) {
+    db.prepare(`DELETE FROM ${table}`).run();
+    entities.forEach((entity, index) => saveEntity(table, entity, index));
+  }
+
+  function saveIdeaSync(idea) {
+    const now = new Date().toISOString();
+    db.prepare(`INSERT INTO ideas (id, content, source_json, created_at, updated_at) VALUES (@id, @content, @sourceJson, @createdAt, @updatedAt)
+      ON CONFLICT(id) DO UPDATE SET content=excluded.content, source_json=excluded.source_json, created_at=excluded.created_at, updated_at=excluded.updated_at`)
+      .run(ideaToRow({ ...idea, content: String(idea.content), createdAt: idea.createdAt || now, updatedAt: idea.updatedAt || idea.createdAt || now }));
+  }
+
   async function readJsonBody(req) {
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
@@ -89,6 +139,133 @@ export function createYinianServer(options = {}) {
 
     if (req.method === 'GET' && url.pathname === '/api/ideas') {
       return sendJson(res, 200, { ideas: await readIdeas() });
+    }
+
+    if (req.method === 'GET' && url.pathname === '/api/product/bootstrap') {
+      return sendJson(res, 200, await readProduct());
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/product/worklines') {
+      const body = await readJsonBody(req);
+      if (!body.thread?.name || !body.entry?.body) return sendJson(res, 400, { error: 'thread name and entry body are required' });
+      await ensureStorage();
+      const thread = { ...body.thread, id: body.thread.id || crypto.randomUUID() };
+      const entry = { ...body.entry, threadId: thread.id, id: body.entry.id || crypto.randomUUID() };
+      const transaction = db.transaction(() => { saveEntity('threads', thread); prependEntity('entries', entry); });
+      transaction();
+      return sendJson(res, 201, { thread, entry });
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/product/threads') {
+      const body = await readJsonBody(req);
+      const thread = { ...body, id: body.id || crypto.randomUUID() };
+      await ensureStorage(); saveEntity('threads', thread);
+      return sendJson(res, 201, { thread });
+    }
+    const threadMatch = url.pathname.match(/^\/api\/product\/threads\/([^/]+)$/);
+    if (req.method === 'PATCH' && threadMatch) {
+      await ensureStorage();
+      const current = getEntity('threads', decodeURIComponent(threadMatch[1]));
+      if (!current) return sendJson(res, 404, { error: 'not found' });
+      const thread = { ...current, ...await readJsonBody(req), id: current.id };
+      saveEntity('threads', thread); return sendJson(res, 200, { thread });
+    }
+    if (req.method === 'DELETE' && threadMatch) {
+      await ensureStorage();
+      const id = decodeURIComponent(threadMatch[1]);
+      db.transaction(() => {
+        db.prepare('DELETE FROM threads WHERE id = ?').run(id);
+        db.prepare("DELETE FROM entries WHERE json_extract(data_json, '$.threadId') = ?").run(id);
+        for (const item of readEntities('explore_items')) {
+          if (item.linkedThreadIds?.includes(id)) saveEntity('explore_items', { ...item, linkedThreadIds: item.linkedThreadIds.filter((threadId) => threadId !== id) });
+        }
+      })();
+      return sendJson(res, 200, { ok: true });
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/product/entries') {
+      const body = await readJsonBody(req);
+      const entry = { ...body, id: body.id || crypto.randomUUID() };
+      if (!entry.threadId) return sendJson(res, 400, { error: 'threadId is required' });
+      await ensureStorage();
+      if (!getEntity('threads', entry.threadId)) return sendJson(res, 400, { error: 'unknown threadId' });
+      prependEntity('entries', entry); return sendJson(res, 201, { entry });
+    }
+    if (req.method === 'POST' && url.pathname === '/api/product/entries/batch-move') {
+      const body = await readJsonBody(req);
+      if (!Array.isArray(body.entryIds) || body.entryIds.length === 0) return sendJson(res, 400, { error: 'entryIds are required' });
+      await ensureStorage();
+      const thread = body.thread ? { ...body.thread, id: body.thread.id || crypto.randomUUID() } : getEntity('threads', body.threadId);
+      if (!thread) return sendJson(res, 400, { error: 'target thread is required' });
+      const entries = [];
+      try {
+        db.transaction(() => {
+          if (body.thread) saveEntity('threads', thread);
+          for (const id of body.entryIds) {
+            const current = getEntity('entries', id);
+            if (!current) throw new Error(`unknown entry: ${id}`);
+            const entry = { ...current, threadId: thread.id };
+            saveEntity('entries', entry); entries.push(entry);
+          }
+        })();
+      } catch (error) { return sendJson(res, 400, { error: error instanceof Error ? error.message : 'batch move failed' }); }
+      return sendJson(res, 200, { thread, entries });
+    }
+    const entryMatch = url.pathname.match(/^\/api\/product\/entries\/([^/]+)$/);
+    if (entryMatch && req.method === 'PATCH') {
+      await ensureStorage();
+      const current = getEntity('entries', decodeURIComponent(entryMatch[1]));
+      if (!current) return sendJson(res, 404, { error: 'not found' });
+      const entry = { ...current, ...await readJsonBody(req), id: current.id };
+      if (!getEntity('threads', entry.threadId)) return sendJson(res, 400, { error: 'unknown threadId' });
+      saveEntity('entries', entry); return sendJson(res, 200, { entry });
+    }
+    if (entryMatch && req.method === 'DELETE') {
+      await ensureStorage(); db.prepare('DELETE FROM entries WHERE id = ?').run(decodeURIComponent(entryMatch[1]));
+      return sendJson(res, 200, { ok: true });
+    }
+
+    const exploreAction = url.pathname.match(/^\/api\/product\/explore-items\/([^/]+)\/(status|notes|thread-link)$/);
+    if (exploreAction && ((exploreAction[2] === 'status' && req.method === 'PATCH') || (exploreAction[2] === 'notes' && req.method === 'POST') || (exploreAction[2] === 'thread-link' && req.method === 'PUT'))) {
+      await ensureStorage();
+      const current = getEntity('explore_items', decodeURIComponent(exploreAction[1]));
+      if (!current) return sendJson(res, 404, { error: 'not found' });
+      const body = await readJsonBody(req);
+      let exploreItem;
+      if (exploreAction[2] === 'status') exploreItem = { ...current, status: body.status };
+      if (exploreAction[2] === 'notes') exploreItem = { ...current, explorationNotes: [...(current.explorationNotes ?? []), { ...body, id: body.id || crypto.randomUUID() }] };
+      if (exploreAction[2] === 'thread-link') {
+        if (!body.threadId || !getEntity('threads', body.threadId)) return sendJson(res, 400, { error: 'unknown threadId' });
+        const links = new Set(current.linkedThreadIds ?? []);
+        if (body.linked === false) links.delete(body.threadId);
+        else links.add(body.threadId);
+        exploreItem = { ...current, linkedThreadIds: [...links] };
+      }
+      saveEntity('explore_items', exploreItem); return sendJson(res, 200, { exploreItem });
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/migrations/local-storage') {
+      const body = await readJsonBody(req);
+      const knownKeys = [...Object.keys(PRODUCT_KEYS), IDEAS_KEY].filter((key) => Object.hasOwn(body, key));
+      if (knownKeys.some((key) => !Array.isArray(body[key]))) return sendJson(res, 400, { error: 'migration collections must be arrays' });
+      if (knownKeys.some((key) => body[key].some((item) => !validEntity(item)))) return sendJson(res, 400, { error: 'migration items require ids' });
+      await ensureStorage();
+      try {
+        db.transaction(() => {
+          for (const [key, table] of Object.entries(PRODUCT_KEYS)) if (Object.hasOwn(body, key)) replaceEntities(table, body[key]);
+          for (const entry of readEntities('entries')) {
+            if (!entry.threadId || !getEntity('threads', entry.threadId)) throw new Error(`unknown entry threadId: ${entry.threadId ?? ''}`);
+          }
+          for (const item of readEntities('explore_items')) {
+            for (const threadId of item.linkedThreadIds ?? []) if (!getEntity('threads', threadId)) throw new Error(`unknown explore threadId: ${threadId}`);
+          }
+          if (Object.hasOwn(body, IDEAS_KEY)) for (const idea of body[IDEAS_KEY]) {
+            if (!idea.content) throw new Error('idea content is required');
+            saveIdeaSync(idea);
+          }
+        })();
+      } catch (error) { return sendJson(res, 400, { error: error instanceof Error ? error.message : 'invalid migration' }); }
+      return sendJson(res, 200, { safeToDeleteKeys: knownKeys });
     }
 
     if (req.method === 'POST' && url.pathname === '/api/ideas') {
@@ -197,8 +374,23 @@ export function createYinianServer(options = {}) {
         updated_at TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_ideas_created_at ON ideas(created_at DESC);
+      CREATE TABLE IF NOT EXISTS threads (id TEXT PRIMARY KEY, data_json TEXT NOT NULL, position INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS entries (id TEXT PRIMARY KEY, data_json TEXT NOT NULL, position INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS explore_items (id TEXT PRIMARY KEY, data_json TEXT NOT NULL, position INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS app_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
     `);
     migrateLegacyJsonIfNeeded();
+    seedProductIfNeeded();
+  }
+
+  function seedProductIfNeeded() {
+    if (db.prepare("SELECT value FROM app_metadata WHERE key = 'product_seeded'").get()) return;
+    db.transaction(() => {
+      replaceEntities('threads', productSeed.threads);
+      replaceEntities('entries', productSeed.entries);
+      replaceEntities('explore_items', productSeed.exploreItems);
+      db.prepare("INSERT INTO app_metadata (key, value) VALUES ('product_seeded', '1')").run();
+    })();
   }
 
   function migrateLegacyJsonIfNeeded() {
@@ -236,6 +428,10 @@ export function createYinianServer(options = {}) {
 
 function readFileSyncUtf8(filePath) {
   return readFileSync(filePath, 'utf8');
+}
+
+function validEntity(value) {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value) && String(value.id ?? '').trim());
 }
 
 function ideaToRow(idea) {
